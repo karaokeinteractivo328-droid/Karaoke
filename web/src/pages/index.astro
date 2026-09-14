@@ -20,12 +20,32 @@ import Base from '../layouts/Base.astro';
   <div id="vozBox">🎙️ <span id="vozStatus">iniciando…</span></div>
   <div id="gestoHUD" hidden>✋ <span id="gestoTxt"></span></div>
   <div id="feedbackFlash"></div>
+  <div id="reacciones-vuelan"></div>
+
+  <!-- sala: código para sumarse + fila, visible en casi todos lados -->
+  <div id="salaBadge">
+    <span class="kicker">sala</span>
+    <span id="salaCodigo">----</span>
+  </div>
+  <div id="cantandoAhora" hidden>🎤 <span></span></div>
 
   <!-- ESPERANDO -->
   <section class="ui" data-estado="ESPERANDO">
-    <p class="kicker">Sentite un cantante profesional</p>
-    <h1 class="cartel">Viví tu<br>era <span class="script">popstar</span></h1>
-    <p class="hint">Levantá la mano o decí "cantar"</p>
+    <div id="turnoLlamado" hidden>
+      <p class="kicker">¡Te toca!</p>
+      <h2 class="cartel" id="turnoNombre">Nombre</h2>
+      <p class="hint">Levantá la mano cuando estés lista/o</p>
+    </div>
+    <div id="esperandoLibre">
+      <p class="kicker">Sentite un cantante profesional</p>
+      <h1 class="cartel">Viví tu<br>era <span class="script">popstar</span></h1>
+      <p class="hint">Levantá la mano o decí "cantar"</p>
+    </div>
+    <div id="salaQR" class="tarjetaQR">
+      <img id="qrSala" alt="QR para sumarte a la sala desde el celu" />
+      <p class="hint">Escaneá para anotarte a la fila</p>
+    </div>
+    <ul id="filaLista"></ul>
   </section>
 
   <!-- MODO: solo o dúo -->

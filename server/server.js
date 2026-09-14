@@ -27,6 +27,7 @@ import QRCode from 'qrcode';
 import ffmpegPath from 'ffmpeg-static';
 
 import { crearMaquina, ESTADOS } from './stateMachine.js';
+import { crearSala } from './sala.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -53,11 +54,26 @@ async function cargarCanciones() {
 
 let canciones = await cargarCanciones();
 
-// --- Maquina de estados -----------------------------------------------
+// --- Maquina de estados + sala (fila de espera y reacciones) -----------
+// Se emiten juntas: todo cliente (pantalla o celu) recibe {..maquina, sala}.
+function emitirTodo() {
+  io.emit('estado', { ...maquina.snapshot(), sala: sala.snapshot() });
+}
+
+let nombrePrevio = ESTADOS.ESPERANDO;
 const maquina = crearMaquina({
   canciones,
-  onCambio: (snap) => io.emit('estado', snap),
+  onCambio: (snap) => {
+    // al terminar una cancion (o resetear a mitad de camino) se libera el
+    // lugar del cantante y se llama automaticamente al siguiente de la fila.
+    if (snap.nombre !== nombrePrevio) {
+      if (snap.nombre === ESTADOS.RESULTADO || snap.nombre === ESTADOS.ESPERANDO) sala.liberar();
+      nombrePrevio = snap.nombre;
+    }
+    emitirTodo();
+  },
 });
+const sala = crearSala({ onCambio: emitirTodo });
 
 // --- API -----------------------------------------------------------
 app.get('/api/canciones', (_req, res) => res.json(canciones));
@@ -193,6 +209,19 @@ app.get('/api/qr-resultado', async (req, res) => {
   }
 });
 
+// QR para anotarse a la sala desde el celu -> /sala?codigo=XXXX (pagina del
+// frontend: en dev vive en el puerto de astro, en produccion es el mismo :3000).
+app.get('/api/qr-sala', async (_req, res) => {
+  const frontPort = SERVIR_BUILD ? PORT : WEB_PORT;
+  const url = `http://${ipLocal()}:${frontPort}/sala?codigo=${sala.codigo}`;
+  try {
+    const dataUrl = await QRCode.toDataURL(url, { margin: 1, width: 320 });
+    res.json({ url, dataUrl, codigo: sala.codigo });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Frontend compilado (solo con npm start) ------------------------
 if (SERVIR_BUILD) {
   app.use(express.static(DIST));
@@ -210,12 +239,15 @@ io.on('connection', (socket) => {
     maquina.enviar('reset');
   }
 
-  socket.emit('estado', maquina.snapshot());
+  socket.emit('estado', { ...maquina.snapshot(), sala: sala.snapshot() });
 
   // La pantalla (gestos + voz) y el sensor mandan acciones aca.
   socket.on('accion', ({ evento, ...payload } = {}) => {
     if (!evento) return;
     console.log(`[accion] ${rol} -> ${evento}`, payload);
+    // si estaba llamado alguien de la fila, levantar la mano lo confirma
+    // como el cantante de esta ronda (queda "cantando" para mostrar su nombre).
+    if (evento === 'presencia' && maquina.nombre === ESTADOS.ESPERANDO) sala.confirmarTurno();
     const ok = maquina.enviar(evento, payload);
     if (!ok) socket.emit('accion-rechazada', { evento, estado: maquina.nombre });
   });
@@ -225,6 +257,23 @@ io.on('connection', (socket) => {
 
   // Puntaje calculado por la pantalla (performance) al terminar.
   socket.on('puntaje', ({ valor } = {}) => maquina.enviar('fin', { puntaje: valor }));
+
+  // --- Sala: se anota alguien desde el celu / manda una reaccion ------
+  socket.on('sala:unirse', ({ codigo, nombre } = {}, cb) => {
+    if (String(codigo || '').trim().toUpperCase() !== sala.codigo) {
+      return cb?.({ ok: false, error: 'Ese código no existe. Fijate en la pantalla.' });
+    }
+    const r = sala.anotarse(nombre);
+    console.log(`[sala] ${rol} se anota:`, nombre, r.ok ? `-> #${r.posicion}` : `RECHAZADO (${r.error})`);
+    cb?.(r);
+  });
+
+  socket.on('sala:reaccion', ({ emoji } = {}) => {
+    if (typeof emoji !== 'string' || !emoji || emoji.length > 8) return;
+    io.emit('reaccion', { emoji });
+  });
+
+  socket.on('sala:salir', ({ id } = {}) => id && sala.salir(id));
 
   socket.on('disconnect', () =>
     console.log(`[socket] desconexion (${rol}) ${socket.id}`)

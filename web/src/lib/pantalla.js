@@ -26,6 +26,16 @@ let modoActual = 'solo';
 let catalogo = [];
 let catalogoFull = [];
 let datosManos = null;
+let salaActual = null;
+
+// QR + código para sumarse a la sala desde el celu (se pide una sola vez).
+fetch('/api/qr-sala')
+  .then((r) => r.json())
+  .then(({ dataUrl, codigo }) => {
+    if (dataUrl) $('#qrSala').src = dataUrl;
+    if (codigo) $('#salaCodigo').textContent = codigo;
+  })
+  .catch(() => {});
 
 fetch('/api/canciones')
   .then((r) => r.json())
@@ -155,6 +165,11 @@ socket.on('estado', (snap) => {
     renderCatalogo();
   }
 
+  if (snap.sala) {
+    salaActual = snap.sala;
+    pintarSala();
+  }
+
   switch (snap.nombre) {
     case 'MODO':
       $('#modoSel')?.setAttribute('data-elegido', modoActual);
@@ -180,10 +195,59 @@ socket.on('estado', (snap) => {
       if (cambio) detenerCancion();
       break;
   }
+  pintarCantando(); // se recalcula siempre: depende del estado + de la sala
   estadoPrevio = snap.nombre;
 });
 
 socket.on('feedback', ({ texto }) => flash(texto));
+
+// --- Sala: fila de espera con turnos automáticos ------------------
+function pintarSala() {
+  if (!salaActual) return;
+  const { fila, llamado, cantando } = salaActual;
+
+  // ESPERANDO: si hay alguien llamado, mostramos "¡te toca!" en vez del
+  // cartel genérico; si no, queda como estaba (cualquiera puede empezar).
+  const hayLlamado = !!llamado;
+  $('#turnoLlamado').hidden = !hayLlamado;
+  $('#esperandoLibre').hidden = hayLlamado;
+  if (hayLlamado) $('#turnoNombre').textContent = llamado.nombre;
+
+  // fila visible (los que siguen después del llamado)
+  const ul = $('#filaLista');
+  ul.innerHTML = '';
+  fila.slice(0, 6).forEach((p, i) => {
+    const li = document.createElement('li');
+    li.textContent = `${i + 1}. ${p.nombre}`;
+    ul.appendChild(li);
+  });
+
+  pintarCantando();
+}
+
+// "🎤 Nombre" arriba de la pantalla mientras esa persona tiene el escenario.
+function pintarCantando() {
+  const el = $('#cantandoAhora');
+  const nombre = salaActual?.cantando?.nombre;
+  const mostrar = nombre && ['CONFIRMADA', 'COUNTDOWN', 'PLAYING'].includes(estadoActual);
+  el.hidden = !mostrar;
+  if (mostrar) el.querySelector('span').textContent = nombre;
+}
+
+// reacciones del celu -> emojis que flotan por la pantalla
+socket.on('reaccion', ({ emoji }) => volarReaccion(emoji));
+function volarReaccion(emoji) {
+  const cont = $('#reacciones-vuelan');
+  const span = document.createElement('span');
+  span.textContent = emoji;
+  const x = 8 + Math.random() * 84; // % del ancho
+  const dur = 2.6 + Math.random() * 1.4;
+  span.style.left = x + 'vw';
+  span.style.setProperty('--dur', dur + 's');
+  span.style.setProperty('--drift', (Math.random() * 2 - 1).toFixed(2));
+  cont.appendChild(span);
+  setTimeout(() => span.remove(), dur * 1000 + 200);
+}
 
 // --- MODO: elegir solo / dúo ------------------------------------
 function pintarModo(d) {

@@ -1,0 +1,143 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base title="Karaoke · Sala">
+  <div id="bg">
+    <div class="halftone h1"></div>
+    <div class="halftone h2"></div>
+  </div>
+
+  <main class="salaPagina">
+    <p class="kicker">karaoke studio</p>
+    <h1 class="cartel" style="font-size: clamp(2rem, 11vw, 3.2rem);">Sumate<br>a la sala</h1>
+
+    <form id="formUnirse" class="tarjeta">
+      <label>
+        Código de la sala
+        <input id="inCodigo" type="text" maxlength="4" placeholder="ABCD" autocapitalize="characters" required />
+      </label>
+      <label>
+        Tu nombre
+        <input id="inNombre" type="text" maxlength="24" placeholder="¿Cómo te llamás?" required />
+      </label>
+      <p id="error" class="error" hidden></p>
+      <button id="btnUnirse" class="grande" type="submit">Unirme</button>
+    </form>
+
+    <section id="pantallaEnFila" class="tarjeta" hidden>
+      <p id="estadoFila" class="estadoFila">Estás en la fila…</p>
+
+      <div id="reaccionesBox">
+        <p class="kicker">Mandale una reacción a quien está cantando</p>
+        <div id="reacciones">
+          <button data-emoji="❤️">❤️</button>
+          <button data-emoji="🔥">🔥</button>
+          <button data-emoji="👏">👏</button>
+          <button data-emoji="😂">😂</button>
+          <button data-emoji="⭐">⭐</button>
+        </div>
+      </div>
+
+      <button id="btnSalir" class="link">Salir de la fila</button>
+    </section>
+  </main>
+
+  <style>
+    body { overflow-y: auto; }
+    .salaPagina {
+      min-height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2.2vh;
+      padding: 6vh 6vw 4vh;
+      text-align: center;
+      position: relative;
+      z-index: 1;
+    }
+    .tarjeta {
+      width: 100%;
+      max-width: 380px;
+      background: rgba(255, 255, 255, 0.7);
+      border: 3px solid var(--tinta);
+      border-radius: 1.2rem;
+      padding: 1.6rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      box-shadow: 6px 6px 0 var(--rosa);
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      text-align: left;
+      font-family: var(--body);
+      font-weight: 700;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    input {
+      font: inherit;
+      font-family: var(--fat);
+      font-size: 1.3rem;
+      text-transform: uppercase;
+      padding: 0.7rem 0.9rem;
+      border: 2px solid var(--tinta);
+      border-radius: 0.6rem;
+      background: #fff;
+      color: var(--tinta);
+    }
+    input:focus { outline: 3px solid var(--rosa); outline-offset: 1px; }
+    .grande {
+      font-family: var(--fat);
+      text-transform: uppercase;
+      font-size: 1.2rem;
+      color: #fff;
+      background: var(--rosa-hot);
+      border: 0;
+      border-radius: 999px;
+      padding: 1rem;
+      cursor: pointer;
+    }
+    .grande:disabled { opacity: 0.6; }
+    .link {
+      background: none;
+      border: 0;
+      color: var(--tinta);
+      opacity: 0.6;
+      text-decoration: underline;
+      font-family: var(--body);
+      cursor: pointer;
+    }
+    .error { color: var(--rosa-hot); font-weight: 700; font-family: var(--body); }
+    .estadoFila {
+      font-family: var(--fat);
+      text-transform: uppercase;
+      font-size: 1.2rem;
+      line-height: 1.2;
+    }
+    #reacciones {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0.5rem;
+      margin-top: 0.8rem;
+    }
+    #reacciones button {
+      font-size: 1.8rem;
+      background: #fff;
+      border: 2px solid var(--tinta);
+      border-radius: 0.7rem;
+      padding: 0.6rem 0;
+      cursor: pointer;
+      transition: transform 0.15s;
+    }
+    #reacciones button.tocado { transform: scale(1.3) rotate(-8deg); }
+  </style>
+
+  <script>
+    import '../lib/sala.js';
+  </script>
+</Base>

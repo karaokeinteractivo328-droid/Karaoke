@@ -588,6 +588,121 @@ body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
   font-weight: 600;
 }
 
+/* ---- Sala: código, cola y reacciones del celu ---- */
+#salaBadge {
+  position: fixed;
+  top: 3vmin;
+  left: 3vmin;
+  z-index: 9;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  font-family: var(--body);
+  color: var(--tinta);
+  background: var(--crema);
+  border: 2px solid var(--tinta);
+  padding: 6px 14px;
+  border-radius: 999px;
+}
+#salaBadge .kicker {
+  font-size: 0.62rem;
+  letter-spacing: 0.3em;
+  opacity: 0.6;
+}
+#salaCodigo {
+  font-family: var(--fat);
+  font-size: 1rem;
+  letter-spacing: 0.12em;
+  color: var(--rosa-hot);
+}
+
+#cantandoAhora {
+  position: fixed;
+  top: 3vmin;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  font-family: var(--fat);
+  font-size: clamp(0.9rem, 2.4vmin, 1.3rem);
+  text-transform: uppercase;
+  color: var(--crema);
+  background: var(--tinta);
+  padding: 8px 20px;
+  border-radius: 999px;
+  box-shadow: 4px 4px 0 var(--rosa);
+}
+#cantandoAhora span { color: var(--rosa-hot); }
+
+/* ESPERANDO: "te toca" y el cartel libre comparten el layout de .ui,
+   por eso son "contents" en vez de cajas propias */
+#turnoLlamado,
+#esperandoLibre { display: contents; }
+#turnoNombre { color: var(--rosa-hot); font-size: clamp(1.8rem, 8vmin, 4.5rem); }
+
+.tarjetaQR {
+  margin-top: 1.4vmin;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6vmin;
+}
+.tarjetaQR img {
+  width: clamp(90px, 16vmin, 160px);
+  background: #fff;
+  border: 3px solid var(--tinta);
+  padding: 8px;
+  box-shadow: 6px 6px 0 var(--rosa);
+}
+
+#filaLista {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5em;
+  margin-top: 0.6vmin;
+  list-style: none;
+  max-width: 80vmin;
+}
+#filaLista li {
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  background: var(--crema);
+  border: 2px solid var(--tinta);
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+
+/* emojis que mandan desde el celu y flotan por la pantalla */
+#reacciones-vuelan {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  overflow: hidden;
+  pointer-events: none;
+}
+#reacciones-vuelan span {
+  position: absolute;
+  bottom: -8vh;
+  font-size: clamp(1.6rem, 4vmin, 3rem);
+  animation: volar var(--dur, 3s) ease-in forwards;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.25));
+}
+@keyframes volar {
+  from { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0; }
+  10% { opacity: 1; }
+  80% { opacity: 1; }
+  to {
+    transform: translateY(-108vh) translateX(calc(var(--drift, 0) * 12vw)) rotate(calc(var(--drift, 0) * 20deg));
+    opacity: 0;
+  }
+}
+
 /* Pantalla apaisada (proyector): tipo mas compacto, lista mas chica */
 @media (min-aspect-ratio: 1/1) {
   .cartel { font-size: clamp(2.2rem, 10vh, 6rem); }
