@@ -34,9 +34,26 @@ npm run dev
 ```
 
 Abrí http://localhost:4321/ (Chrome o Edge para la voz). La primera vez pide
-permiso de **cámara** y **micrófono**.
+permiso de **cámara** y **micrófono**. Arranca directo, sin pantalla de "tocá
+para empezar".
 
 `npm start` = build + todo en el :3000 (lo que usarías en el evento).
+
+### Modo kiosco (para que el audio suene solo, sin ningún click)
+
+Los navegadores bloquean el audio con sonido hasta que hay una interacción real
+de la persona (por diseño, para evitar autoplay molesto). Como acá todo el
+control es por cámara/voz, puede que la primera canción arranque muda hasta que
+alguien haga click o toque la pantalla una vez. Para que ande siempre sin
+ningún click, abrí Chrome con:
+
+```bash
+chrome --autoplay-policy=no-user-gesture-required --kiosk http://localhost:3000/
+```
+
+(en Windows probá `start chrome --autoplay-policy=no-user-gesture-required --kiosk http://localhost:3000/`
+con `npm start` corriendo). Con ese flag el audio se desbloquea solo apenas
+carga la página.
 
 ## Máquina de estados
 

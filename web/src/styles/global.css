@@ -46,37 +46,6 @@ html, body {
 img { max-width: 100%; }
 [hidden] { display: none !important; }
 
-/* ---- overlay de arranque (desbloquea el audio) ---- */
-#arrancar {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  background: var(--crema);
-  cursor: pointer;
-}
-#arrancar .kicker {
-  font-family: var(--body);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.35em;
-  font-size: clamp(0.7rem, 1.8vmin, 1rem);
-  opacity: 0.55;
-  margin-bottom: 1vmin;
-}
-#arrancar .cartel {
-  font-family: var(--fat);
-  text-transform: uppercase;
-  font-size: clamp(2.6rem, 12vmin, 8rem);
-  line-height: 0.86;
-  letter-spacing: -0.02em;
-  animation: latido 1.6s ease-in-out infinite;
-}
-@keyframes latido { 0%,100% { transform: scale(1); } 50% { transform: scale(1.03); } }
-
 /* ---- Fondo ---- */
 #bg {
   position: fixed;

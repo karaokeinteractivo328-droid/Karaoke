@@ -50,16 +50,12 @@ const retos = crearRetos({
   },
 });
 
-// overlay de arranque: el primer toque desbloquea el audio (autoplay policy)
-const arrancar = $('#arrancar');
-const quitarArranque = () => {
-  audioBus.desbloquear();
-  arrancar?.remove();
-  removeEventListener('pointerdown', quitarArranque);
-  removeEventListener('keydown', quitarArranque);
-};
-addEventListener('pointerdown', quitarArranque);
-addEventListener('keydown', quitarArranque);
+// Arranca directo, sin pantalla de "tocá para empezar". Intentamos
+// desbloquear el audio apenas carga (funciona solo si el navegador corre con
+// --autoplay-policy=no-user-gesture-required, ver README "Modo kiosco").
+// Igual dejamos el intento silencioso: si en algún momento hay un click/tecla
+// real, sirve como red de seguridad.
+audioBus.desbloquear();
 
 function frame() {
   escenario.latir(audioBus.tick());
@@ -104,6 +100,7 @@ navigator.mediaDevices
     camStream = stream;
     video.srcObject = stream;
     audioBus.agregarMic(stream); // la voz entra a la grabación
+    audioBus.desbloquear(); // otro intento: a veces el permiso de camara ya cuenta como interaccion
     return crearReconocimiento({
       video,
       numManos: 2,
