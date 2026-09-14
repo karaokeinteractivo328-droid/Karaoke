@@ -17,7 +17,7 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
-import { readFile, mkdir, writeFile, rm } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, rm, rename, stat, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -70,25 +70,72 @@ await mkdir(GRAB, { recursive: true });
 const idOk = (s) => /^[A-Za-z0-9]{4,40}$/.test(s || '');
 const enProceso = new Set();
 
+// Si el server se reinicia (o se cuelga) a mitad de una conversion, puede
+// quedar un *.tmp.mp4 huerfano de una vez anterior: nunca es valido, lo
+// limpiamos al arrancar para que no confunda el estado de "listo".
+for (const f of await readdir(GRAB).catch(() => [])) {
+  if (f.endsWith('.tmp.mp4')) await rm(join(GRAB, f), { force: true }).catch(() => {});
+}
+
+// Convierte a un archivo TEMPORAL y recien al final lo renombra al .mp4
+// definitivo. Asi, si ffmpeg se cuelga, lo matamos, o el server se reinicia
+// a mitad de camino, JAMAS queda un .mp4 a medio escribir sirviendose como
+// si estuviera listo (eso es lo que rompia la descarga).
 function aMp4(sesion) {
   const webm = join(GRAB, `${sesion}.webm`);
+  const tmp = join(GRAB, `${sesion}.tmp.mp4`);
   const mp4 = join(GRAB, `${sesion}.mp4`);
   enProceso.add(sesion);
   const args = [
-    '-y', '-i', webm,
+    '-y',
+    '-fflags', '+genpts+igndts', // el webm de MediaRecorder no trae timestamps prolijos
+    '-i', webm,
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '25', '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac', '-b:a', '160k',
+    '-c:a', 'aac', '-b:a', '160k', '-ar', '44100',
+    '-max_muxing_queue_size', '4096',
     '-movflags', '+faststart',
-    mp4,
+    tmp,
   ];
-  execFile(ffmpegPath || 'ffmpeg', args, { maxBuffer: 1 << 26 }, async (err) => {
-    enProceso.delete(sesion);
-    if (err) {
-      console.warn(`[video] ffmpeg fallo (${sesion}):`, err.message.split('\n')[0]);
-      return;
+  const proc = execFile(
+    ffmpegPath || 'ffmpeg',
+    args,
+    { maxBuffer: 1 << 26, timeout: 15 * 60 * 1000 },
+    async (err, _stdout, stderr) => {
+      enProceso.delete(sesion);
+      if (err) {
+        console.warn(`[video] ffmpeg fallo (${sesion}):`, err.message.split('\n')[0]);
+        console.warn((stderr || '').split('\n').slice(-15).join('\n'));
+        await rm(tmp, { force: true }).catch(() => {});
+        return;
+      }
+      // sanity check: que el resultado exista, pese algo, y sea decodificable
+      try {
+        const st = await stat(tmp);
+        if (st.size < 10_000) throw new Error(`mp4 sospechosamente chico (${st.size}B)`);
+        await validarMp4(tmp);
+      } catch (e) {
+        console.warn(`[video] mp4 invalido para ${sesion}:`, e.message);
+        await rm(tmp, { force: true }).catch(() => {});
+        return;
+      }
+      await rename(tmp, mp4);
+      console.log(`[video] ${sesion}.mp4 listo`);
+      await rm(webm, { force: true }).catch(() => {});
     }
-    console.log(`[video] ${sesion}.mp4 listo`);
-    await rm(webm, { force: true }).catch(() => {});
+  );
+  return proc;
+}
+
+// Re-decodifica el archivo (sin generar salida) para confirmar que el mp4
+// que armamos realmente abre. Barato comparado con el encode en si.
+function validarMp4(path) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      ffmpegPath || 'ffmpeg',
+      ['-v', 'error', '-i', path, '-t', '1', '-f', 'null', '-'],
+      { timeout: 30_000 },
+      (err, _stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve())
+    );
   });
 }
 
@@ -130,7 +177,7 @@ ${listo
      <a class="btn" href="/video/${a}.mp4" download="karaoke-${a}.mp4">↓ Descargar (mp4)</a>`
   : subiendo
     ? `<p>Todavía no llegó tu video. Recargá en unos segundos.</p><script>setTimeout(()=>location.reload(),4000)</script>`
-    : `<p>Procesando tu video… (esto tarda ~30 s)</p><script>setTimeout(()=>location.reload(),5000)</script>`}
+    : `<p>Procesando tu video… puede tardar unos minutos, no cierres esta página.</p><script>setTimeout(()=>location.reload(),6000)</script>`}
 </body></html>`);
 });
 
