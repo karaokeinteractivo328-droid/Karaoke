@@ -29,7 +29,10 @@ let datosManos = null;
 let salaActual = null;
 
 // QR + código para sumarse a la sala desde el celu (se pide una sola vez).
-fetch('/api/qr-sala')
+// Ojo: son pedidos al backend (Socket.IO/API), no al origen del frontend
+// -> siempre con SOCKET_URL, porque en producción viven en dominios distintos
+// (frontend en Vercel, backend en Render).
+fetch(`${SOCKET_URL}/api/qr-sala`)
   .then((r) => r.json())
   .then(({ dataUrl, codigo }) => {
     if (dataUrl) $('#qrSala').src = dataUrl;
@@ -37,7 +40,7 @@ fetch('/api/qr-sala')
   })
   .catch(() => {});
 
-fetch('/api/canciones')
+fetch(`${SOCKET_URL}/api/canciones`)
   .then((r) => r.json())
   .then((d) => (catalogoFull = d))
   .catch(() => {});
@@ -313,7 +316,7 @@ async function arrancarCancion(cancion) {
 
   if (meta?.lrc) {
     try {
-      letras = parsearLRC(await fetch(meta.lrc).then((r) => r.text()));
+      letras = parsearLRC(await fetch(SOCKET_URL + meta.lrc).then((r) => r.text()));
       if (modoActual === 'duo') voces = repartirDuo(letras);
     } catch (e) {
       console.warn('letra:', e.message);
@@ -322,7 +325,7 @@ async function arrancarCancion(cancion) {
 
   const dur = duracionCancion;
   if (meta?.audio) {
-    audio.src = meta.audio;
+    audio.src = SOCKET_URL + meta.audio;
     audio.currentTime = 0;
     audio.load();
     audio.play().catch(() => {});
@@ -493,7 +496,7 @@ function mostrarResultado(snap) {
     if (v >= meta) clearInterval(el._t);
   }, 25);
 
-  fetch('/api/qr-resultado?sesion=' + encodeURIComponent(sesionActual))
+  fetch(`${SOCKET_URL}/api/qr-resultado?sesion=` + encodeURIComponent(sesionActual))
     .then((r) => r.json())
     .then(({ dataUrl }) => { if (dataUrl) $('#qrResultado').src = dataUrl; })
     .catch(() => {});

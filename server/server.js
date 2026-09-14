@@ -197,10 +197,18 @@ ${listo
 </body></html>`);
 });
 
-// QR de la pantalla de RESULTADO -> pagina de descarga del video.
+// URLs publicas cuando esta deployado (frontend en Vercel, backend en Render):
+// si estan seteadas las usamos tal cual; si no, asumimos el modo kiosco local
+// del evento (todo en la misma red wifi, direccionado por IP).
+const FRONTEND_PUBLICO = process.env.PUBLIC_FRONTEND_URL?.replace(/\/$/, '');
+const BACKEND_PUBLICO = process.env.PUBLIC_BACKEND_URL?.replace(/\/$/, '');
+
+// QR de la pantalla de RESULTADO -> pagina de descarga del video (la sirve
+// este mismo backend).
 app.get('/api/qr-resultado', async (req, res) => {
   const sesion = req.query.sesion || '';
-  const url = `http://${ipLocal()}:${PORT}/video/${sesion}`;
+  const base = BACKEND_PUBLICO || `http://${ipLocal()}:${PORT}`;
+  const url = `${base}/video/${sesion}`;
   try {
     const dataUrl = await QRCode.toDataURL(url, { margin: 1, width: 320 });
     res.json({ url, dataUrl });
@@ -210,10 +218,11 @@ app.get('/api/qr-resultado', async (req, res) => {
 });
 
 // QR para anotarse a la sala desde el celu -> /sala?codigo=XXXX (pagina del
-// frontend: en dev vive en el puerto de astro, en produccion es el mismo :3000).
+// frontend: en dev vive en el puerto de astro, en produccion en Vercel).
 app.get('/api/qr-sala', async (_req, res) => {
   const frontPort = SERVIR_BUILD ? PORT : WEB_PORT;
-  const url = `http://${ipLocal()}:${frontPort}/sala?codigo=${sala.codigo}`;
+  const base = FRONTEND_PUBLICO || `http://${ipLocal()}:${frontPort}`;
+  const url = `${base}/sala?codigo=${sala.codigo}`;
   try {
     const dataUrl = await QRCode.toDataURL(url, { margin: 1, width: 320 });
     res.json({ url, dataUrl, codigo: sala.codigo });

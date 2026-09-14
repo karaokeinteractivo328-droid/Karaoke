@@ -55,6 +55,33 @@ chrome --autoplay-policy=no-user-gesture-required --kiosk http://localhost:3000/
 con `npm start` corriendo). Con ese flag el audio se desbloquea solo apenas
 carga la página.
 
+## Deploy online (Vercel + Render)
+
+El evento en sí (pantalla + cámara del kiosco) corre local como arriba. Pero
+para poder mostrar/probar la sala desde cualquier lado (no solo la wifi del
+lugar), el frontend y el backend se despliegan por separado porque el
+"cerebro" necesita quedar siempre prendido (Socket.IO + estado en memoria +
+`ffmpeg`), algo que Vercel no soporta (solo corre funciones cortas).
+
+- **Backend (`server/`) → Render** (o cualquier host de Node persistente):
+  - Build command: `npm install`
+  - Start command: `npm -w server run start` (usa el `PORT` que da Render solo)
+  - Variables de entorno:
+    - `PUBLIC_BACKEND_URL` = la URL pública que te da Render (para el QR de descarga del video)
+    - `PUBLIC_FRONTEND_URL` = la URL de Vercel (para el QR de la sala, ver abajo)
+- **Frontend (`web/`) → Vercel**:
+  - Ya incluido un `vercel.json` en la raíz que compila solo `web/` (`buildCommand`
+    + `outputDirectory: web/dist`) — no hace falta tocar nada en el dashboard.
+  - Variable de entorno: `PUBLIC_SOCKET_URL` = la URL pública de Render.
+
+Sin esas variables, todo sigue funcionando en modo local (kiosco) exactamente
+igual que antes: usa la IP de la red wifi para armar los QR.
+
+⚠️ En el plan gratis de Render el servicio "se duerme" tras ~15 min sin uso
+(la primera visita después tarda en despertar) y el disco no es persistente
+entre reinicios — los videos grabados pueden perderse si el server se
+reinicia. Para el evento real conviene seguir usando el modo local de arriba.
+
 ## Máquina de estados
 
 `ESPERANDO → MODO → SELECCIONANDO → CONFIRMADA → COUNTDOWN → PLAYING → RESULTADO → ESPERANDO`
