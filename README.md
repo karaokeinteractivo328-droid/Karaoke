@@ -101,6 +101,32 @@ pantalla solo manda **acciones** y renderiza el `estado`.
   que lo pasa a **.mp4** con ffmpeg. El **QR** lleva a `http://IP:3000/video/<sesión>`
   (reproductor + descarga). El primer toque en la pantalla desbloquea el audio.
 
+## Sala: fila, reacciones, leaderboard y copiloto
+
+Aparte de la máquina de estados de la canción, [server/sala.js](server/sala.js)
+lleva un sistema paralelo de fila de espera:
+
+- Al arrancar el server se genera un **código de sala** (4 letras). El QR en
+  pantalla lleva a `/sala?codigo=XXXX`, donde cualquiera se anota con su
+  nombre. Se llama automáticamente al primero de la fila; confirma turno
+  levantando la mano (mismo gesto de `presencia`).
+- Mientras espera, esa persona ya puede **elegir su canción** desde el celu
+  (`sala:preseleccionar`) — al confirmar turno, la pantalla arranca directo
+  ahí en vez de en la primera de la lista.
+- Cualquiera en la sala puede mandar **reacciones** (❤️🔥👏😂⭐) que vuelan por
+  la pantalla con el nombre de quien las mandó y un contador en vivo.
+- **Modo copiloto**: al confirmar turno se genera una clave de 4 caracteres
+  para esa ronda (un segundo QR chiquito junto al nombre del cantante). La
+  primera persona que la reclama desde `/sala?...&rol=copiloto&clave=XXXX`
+  se queda con el puesto (uno solo por ronda) y ve un "teleprompter" con la
+  letra actual/siguiente para ayudar al que canta.
+- Al terminar cada canción, si están seteadas `SUPABASE_URL` /
+  `SUPABASE_SERVICE_ROLE_KEY` ([server/supabase.js](server/supabase.js)), se
+  guarda el puntaje (con iniciales derivadas del nombre) y el resumen de
+  reacciones. `GET /api/leaderboard` devuelve el top 10, que se muestra en
+  RESULTADO. Sin esas variables, todo funciona igual, simplemente no
+  persiste nada — ver esquema en [docs/supabase-schema.sql](docs/supabase-schema.sql).
+
 ## Control por cámara
 
 ### Manos + presencia + recorte — MediaPipe Tasks Vision
@@ -118,6 +144,13 @@ pantalla solo manda **acciones** y renderiza el `estado`.
 | mano arriba / abajo (SELECCIONANDO) | `scroll` |
 | pellizco (pulgar + índice) sostenido ~1s | `confirmar` |
 | **gesto de corazón** (dos manos) | efecto: stamp ♥ + la estrella se pone hot pink |
+
+Detecta hasta **4 manos a la vez** (cantante + copiloto, ver "Modo copiloto"
+más abajo), clasificadas por mitad de cámara (izquierda/derecha) para que el
+reto "las dos manos arriba" pida una de cada lado cuando hay más de una
+persona en cuadro. Es una heurística por posición en pantalla, no
+reconocimiento real de personas — funciona bien si cada uno se para de su
+lado, se puede confundir si se mueven o se cruzan.
 
 El esqueleto de la mano se dibuja como **tinta** (líneas negras + nodos magenta,
 sin glow) en un canvas 2D — [web/src/lib/manosCanvas.js](web/src/lib/manosCanvas.js).
