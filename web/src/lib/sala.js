@@ -1,7 +1,7 @@
 // Página del celu: anotarse a la fila con tu nombre + mandar reacciones
 // mientras otro canta. Nada de gestos ni control de canción acá.
 
-import { conectar } from './socket.js';
+import { conectar, SOCKET_URL } from './socket.js';
 
 const $ = (s) => document.querySelector(s);
 const socket = conectar('celu');
@@ -12,6 +12,8 @@ if (codigoUrl) $('#inCodigo').value = codigoUrl;
 
 let miId = null;
 let salaActual = null;
+let catalogo = [];
+let catalogoPedido = false;
 
 socket.on('estado', (snap) => {
   salaActual = snap.sala || null;
@@ -66,10 +68,43 @@ function pintarEstado() {
 
   let texto;
   if (soyElCantante) texto = '🎤 ¡Es tu turno! Mirá la pantalla y cantá fuerte';
-  else if (soyElLlamado) texto = '👉 ¡Te están llamando! Acercate y levantá la mano';
+  else if (soyElLlamado) texto = '👉 ¡Te están llamando! Elegí tu canción y levantá la mano';
   else if (miPos >= 0) texto = `Estás #${miPos + 1} en la fila`;
   else texto = salaActual.cantando ? `Cantando: ${salaActual.cantando.nombre}` : 'Esperando el próximo turno…';
   $('#estadoFila').textContent = texto;
 
-  $('#reaccionesBox').hidden = !!soyElCantante; // si estás cantando no tenés el celu en la mano
+  // mientras te toca elegir o ya estas cantando, no tiene sentido reaccionar
+  $('#reaccionesBox').hidden = !!(soyElCantante || soyElLlamado);
+  $('#cancionesBox').hidden = !soyElLlamado;
+  if (soyElLlamado) {
+    if (!catalogoPedido) pedirCatalogo();
+    else pintarCanciones(salaActual.llamado.preseleccion);
+  }
+}
+
+function pedirCatalogo() {
+  catalogoPedido = true;
+  fetch(`${SOCKET_URL}/api/canciones`)
+    .then((r) => r.json())
+    .then((d) => {
+      catalogo = d;
+      pintarCanciones(salaActual?.llamado?.preseleccion);
+    })
+    .catch(() => { catalogoPedido = false; });
+}
+
+function pintarCanciones(indiceElegido) {
+  const ul = $('#cancionesLista');
+  if (!ul) return;
+  ul.innerHTML = '';
+  catalogo.forEach((c, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `${c.titulo}<span class="art">${c.artista}</span>`;
+    li.classList.toggle('elegida', i === indiceElegido);
+    li.addEventListener('click', () => {
+      socket.emit('sala:preseleccionar', { id: miId, indice: i });
+      [...ul.children].forEach((el, k) => el.classList.toggle('elegida', k === i));
+    });
+    ul.appendChild(li);
+  });
 }

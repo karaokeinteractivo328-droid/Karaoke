@@ -15,6 +15,8 @@ export function conectar(rol) {
   return io(URL, { query: { rol }, transports: ['websocket', 'polling'] });
 }
 
+export const SOCKET_URL = URL;
+
 export const ESTADOS = [
   'ESPERANDO',
   'SELECCIONANDO',

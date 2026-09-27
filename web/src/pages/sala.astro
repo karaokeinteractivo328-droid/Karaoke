@@ -28,6 +28,11 @@ import Base from '../layouts/Base.astro';
     <section id="pantallaEnFila" class="tarjeta" hidden>
       <p id="estadoFila" class="estadoFila">Estás en la fila…</p>
 
+      <div id="cancionesBox" hidden>
+        <p class="kicker">Elegí tu canción para cuando te toque</p>
+        <ul id="cancionesLista"></ul>
+      </div>
+
       <div id="reaccionesBox">
         <p class="kicker">Mandale una reacción a quien está cantando</p>
         <div id="reacciones">
@@ -135,6 +140,40 @@ import Base from '../layouts/Base.astro';
       transition: transform 0.15s;
     }
     #reacciones button.tocado { transform: scale(1.3) rotate(-8deg); }
+    #cancionesLista {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-top: 0.6rem;
+      max-height: 40vh;
+      overflow-y: auto;
+    }
+    /* los <li> se crean por JS (sala.js): sin :global Astro no los ve,
+       porque no tienen el atributo de scope del componente. */
+    #cancionesLista :global(li) {
+      font-family: var(--body);
+      font-weight: 700;
+      text-align: left;
+      background: #fff;
+      border: 2px solid var(--tinta);
+      border-radius: 0.6rem;
+      padding: 0.6rem 0.8rem;
+      cursor: pointer;
+    }
+    #cancionesLista :global(li .art) {
+      display: block;
+      font-weight: 500;
+      opacity: 0.65;
+      font-size: 0.8em;
+      margin-top: 0.15rem;
+    }
+    #cancionesLista :global(li.elegida) {
+      background: var(--rosa-hot);
+      color: #fff;
+      border-color: var(--rosa-hot);
+    }
+    #cancionesLista :global(li.elegida .art) { opacity: 0.85; }
   </style>
 
   <script>

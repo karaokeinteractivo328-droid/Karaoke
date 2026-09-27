@@ -49,10 +49,19 @@ export function crearSala({ onCambio } = {}) {
       return { ok: false, error: 'La fila está llena, probá en un rato' };
     }
     const id = Math.random().toString(36).slice(2, 9);
-    fila.push({ id, nombre: limpio });
+    fila.push({ id, nombre: limpio, preseleccion: null });
     llamarSiguiente();
     emitir();
     return { ok: true, id, posicion: fila.length };
+  }
+
+  // El "llamado" (mientras espera confirmar turno) ya puede elegir su
+  // cancion desde el celu. Se guarda para usarla apenas confirme turno.
+  function preseleccionar(id, indiceCancion) {
+    if (llamado?.id !== id) return false;
+    llamado.preseleccion = Number.isInteger(indiceCancion) ? indiceCancion : null;
+    emitir();
+    return true;
   }
 
   function llamarSiguiente() {
@@ -73,7 +82,7 @@ export function crearSala({ onCambio } = {}) {
     cantando = llamado;
     llamado = null;
     emitir();
-    return cantando;
+    return cantando; // incluye .preseleccion si lo habia elegido desde el celu
   }
 
   // Termino la cancion (o se reseteo a mitad de camino): libera el lugar y
@@ -113,6 +122,7 @@ export function crearSala({ onCambio } = {}) {
     snapshot,
     anotarse,
     confirmarTurno,
+    preseleccionar,
     liberar,
     salir,
     buscarNombre,

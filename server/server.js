@@ -62,6 +62,9 @@ function emitirTodo() {
 }
 
 let nombrePrevio = ESTADOS.ESPERANDO;
+// si quien confirmo turno ya habia elegido cancion desde el celu mientras
+// esperaba, se aplica apenas la maquina entre a SELECCIONANDO (ver 'accion').
+let preseleccionPendiente = null;
 const maquina = crearMaquina({
   canciones,
   onCambio: (snap) => {
@@ -264,8 +267,17 @@ io.on('connection', (socket) => {
     console.log(`[accion] ${rol} -> ${evento}`, payload);
     // si estaba llamado alguien de la fila, levantar la mano lo confirma
     // como el cantante de esta ronda (queda "cantando" para mostrar su nombre).
-    if (evento === 'presencia' && maquina.nombre === ESTADOS.ESPERANDO) sala.confirmarTurno();
+    if (evento === 'presencia' && maquina.nombre === ESTADOS.ESPERANDO) {
+      const cantando = sala.confirmarTurno();
+      preseleccionPendiente = Number.isInteger(cantando?.preseleccion) ? cantando.preseleccion : null;
+    }
     const ok = maquina.enviar(evento, payload);
+    // si ya habia elegido cancion desde el celu mientras esperaba en la fila,
+    // se la aplicamos apenas entra a SELECCIONANDO (en vez de arrancar en la 0).
+    if (evento === 'modo' && ok && preseleccionPendiente != null) {
+      maquina.enviar('seleccionar', { indice: preseleccionPendiente });
+      preseleccionPendiente = null;
+    }
     if (!ok) socket.emit('accion-rechazada', { evento, estado: maquina.nombre });
   });
 
@@ -296,6 +308,12 @@ io.on('connection', (socket) => {
     const r = sala.anotarse(nombre);
     console.log(`[sala] ${rol} se anota:`, nombre, r.ok ? `-> #${r.posicion}` : `RECHAZADO (${r.error})`);
     cb?.(r);
+  });
+
+  // Mientras espera su turno, el "llamado" ya elige la cancion desde el celu.
+  socket.on('sala:preseleccionar', ({ id, indice } = {}, cb) => {
+    const ok = sala.preseleccionar(id, indice);
+    cb?.({ ok });
   });
 
   socket.on('sala:reaccion', ({ emoji, id } = {}) => {
