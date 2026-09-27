@@ -28,6 +28,7 @@ import ffmpegPath from 'ffmpeg-static';
 
 import { crearMaquina, ESTADOS } from './stateMachine.js';
 import { crearSala } from './sala.js';
+import { guardarPuntaje, obtenerLeaderboard } from './supabase.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -78,6 +79,10 @@ const sala = crearSala({ onCambio: emitirTodo });
 // --- API -----------------------------------------------------------
 app.get('/api/canciones', (_req, res) => res.json(canciones));
 app.use('/canciones', express.static(join(__dirname, 'canciones')));
+
+app.get('/api/leaderboard', async (_req, res) => {
+  res.json(await obtenerLeaderboard(10));
+});
 
 // --- Grabaciones: la pantalla sube el .webm, el server lo pasa a .mp4 con
 //     ffmpeg, y el celular lo baja por QR ---
@@ -267,8 +272,21 @@ io.on('connection', (socket) => {
   // La pantalla avisa cuando la cancion termino.
   socket.on('cancion-fin', () => maquina.enviar('fin'));
 
-  // Puntaje calculado por la pantalla (performance) al terminar.
-  socket.on('puntaje', ({ valor } = {}) => maquina.enviar('fin', { puntaje: valor }));
+  // Puntaje calculado por la pantalla (performance) al terminar. Capturamos
+  // quien canto/que cancion antes de "fin": ese evento dispara sala.liberar()
+  // (via el onCambio de la maquina) y ahi se pierde el "cantando" actual.
+  socket.on('puntaje', ({ valor, reacciones } = {}) => {
+    const cantando = sala.snapshot().cantando;
+    const { sesionId, cancion } = maquina.snapshot();
+    maquina.enviar('fin', { puntaje: valor });
+    guardarPuntaje({
+      sesionId,
+      nombre: cantando?.nombre,
+      puntaje: maquina.snapshot().puntaje, // ya redondeado/con fallback por la maquina
+      cancion,
+      reacciones,
+    });
+  });
 
   // --- Sala: se anota alguien desde el celu / manda una reaccion ------
   socket.on('sala:unirse', ({ codigo, nombre } = {}, cb) => {

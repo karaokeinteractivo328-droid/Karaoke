@@ -575,6 +575,29 @@ body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
   margin-top: 1vmin;
 }
 
+#leaderboardBox {
+  margin-top: 1.4vmin;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4vmin;
+}
+#leaderboard {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2vmin;
+  align-items: center;
+}
+#leaderboard li {
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: clamp(0.75rem, 1.8vmin, 1rem);
+  color: var(--tinta);
+  opacity: 0.75;
+}
+#leaderboard li b { color: var(--rosa-hot); margin-right: 0.4em; }
+
 .aviso {
   position: fixed;
   bottom: 12px;

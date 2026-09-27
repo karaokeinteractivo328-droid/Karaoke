@@ -397,7 +397,7 @@ function finDeCancion() {
   const avance = Math.min(1, relojBase() / duracionCancion);
   const base = Math.round(45 + avance * 30);
   const valor = Math.min(100, base + retos.puntaje);
-  socket.emit('puntaje', { valor });
+  socket.emit('puntaje', { valor, reacciones: contadorReacciones });
 }
 
 // Ajuste fino de sincronía en vivo: [ y ]
@@ -499,6 +499,19 @@ function detenerCancion() {
   } catch {}
 }
 
+function pintarLeaderboard(lista) {
+  const box = $('#leaderboardBox');
+  const ul = $('#leaderboard');
+  if (!box || !ul) return;
+  ul.innerHTML = '';
+  (lista || []).forEach((p) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<b>${escapeHtml(p.iniciales)}</b> ${p.puntaje}`;
+    ul.appendChild(li);
+  });
+  box.hidden = !lista?.length;
+}
+
 // --- Retos: cartel ------------------------------------------
 function pintarReto(reto) {
   const el = $('#reto');
@@ -523,6 +536,11 @@ function mostrarResultado(snap) {
     el.textContent = v;
     if (v >= meta) clearInterval(el._t);
   }, 25);
+
+  fetch(`${SOCKET_URL}/api/leaderboard`)
+    .then((r) => r.json())
+    .then(pintarLeaderboard)
+    .catch(() => {});
 
   fetch(`${SOCKET_URL}/api/qr-resultado?sesion=` + encodeURIComponent(sesionActual))
     .then((r) => r.json())
