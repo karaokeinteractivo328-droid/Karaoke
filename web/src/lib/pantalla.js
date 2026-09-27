@@ -184,6 +184,10 @@ socket.on('estado', (snap) => {
       $('#confTitulo').textContent = snap.cancion
         ? `${snap.cancion.titulo} · ${snap.cancion.artista}`
         : '';
+      if (cambio) {
+        contadorReacciones = {}; // arranca de cero para este cantante
+        pintarContadorReacciones();
+      }
       break;
     case 'COUNTDOWN':
       $('#cuenta').textContent = snap.countdown ?? 3;
@@ -199,6 +203,7 @@ socket.on('estado', (snap) => {
       break;
   }
   pintarCantando(); // se recalcula siempre: depende del estado + de la sala
+  pintarContadorReacciones();
   estadoPrevio = snap.nombre;
 });
 
@@ -234,22 +239,45 @@ function pintarCantando() {
   const nombre = salaActual?.cantando?.nombre;
   const mostrar = nombre && ['CONFIRMADA', 'COUNTDOWN', 'PLAYING'].includes(estadoActual);
   el.hidden = !mostrar;
-  if (mostrar) el.querySelector('span').textContent = nombre;
+  if (mostrar) $('#cantandoNombre').textContent = nombre;
 }
 
-// reacciones del celu -> emojis que flotan por la pantalla
-socket.on('reaccion', ({ emoji }) => volarReaccion(emoji));
-function volarReaccion(emoji) {
+// reacciones del celu -> emojis que flotan por la pantalla + contador en vivo
+// (se reinicia con cada cantante nuevo, ver `contadorReacciones = {}` en CONFIRMADA)
+let contadorReacciones = {};
+socket.on('reaccion', ({ emoji, nombre }) => {
+  volarReaccion(emoji, nombre);
+  contadorReacciones[emoji] = (contadorReacciones[emoji] || 0) + 1;
+  pintarContadorReacciones();
+});
+
+function volarReaccion(emoji, nombre) {
   const cont = $('#reacciones-vuelan');
   const span = document.createElement('span');
-  span.textContent = emoji;
+  span.className = 'reaccionVolando';
   const x = 8 + Math.random() * 84; // % del ancho
   const dur = 2.6 + Math.random() * 1.4;
   span.style.left = x + 'vw';
   span.style.setProperty('--dur', dur + 's');
   span.style.setProperty('--drift', (Math.random() * 2 - 1).toFixed(2));
+  span.innerHTML = `<b>${emoji}</b>${nombre ? `<small>${escapeHtml(nombre)}</small>` : ''}`;
   cont.appendChild(span);
   setTimeout(() => span.remove(), dur * 1000 + 200);
+}
+
+function pintarContadorReacciones() {
+  const el = $('#reaccionesContador');
+  if (!el) return;
+  const partes = Object.entries(contadorReacciones)
+    .sort((a, b) => b[1] - a[1])
+    .map(([emoji, n]) => `${emoji}${n}`);
+  const mostrar = partes.length && ['CONFIRMADA', 'COUNTDOWN', 'PLAYING'].includes(estadoActual);
+  el.textContent = partes.join(' ');
+  el.hidden = !mostrar;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // --- MODO: elegir solo / dúo ------------------------------------

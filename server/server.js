@@ -280,9 +280,10 @@ io.on('connection', (socket) => {
     cb?.(r);
   });
 
-  socket.on('sala:reaccion', ({ emoji } = {}) => {
+  socket.on('sala:reaccion', ({ emoji, id } = {}) => {
     if (typeof emoji !== 'string' || !emoji || emoji.length > 8) return;
-    io.emit('reaccion', { emoji });
+    const nombre = sala.buscarNombre(id) || null;
+    io.emit('reaccion', { emoji, nombre });
   });
 
   socket.on('sala:salir', ({ id } = {}) => id && sala.salir(id));

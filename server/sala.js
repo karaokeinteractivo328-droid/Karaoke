@@ -85,6 +85,15 @@ export function crearSala({ onCambio } = {}) {
     emitir();
   }
 
+  // Busca el nombre de alguien por id, sin importar si esta en la fila,
+  // recien llamado o cantando. Para atribuir reacciones a quien las mando.
+  function buscarNombre(id) {
+    if (!id) return null;
+    if (cantando?.id === id) return cantando.nombre;
+    if (llamado?.id === id) return llamado.nombre;
+    return fila.find((p) => p.id === id)?.nombre ?? null;
+  }
+
   function salir(id) {
     const antes = fila.length;
     fila = fila.filter((p) => p.id !== id);
@@ -106,6 +115,7 @@ export function crearSala({ onCambio } = {}) {
     confirmarTurno,
     liberar,
     salir,
+    buscarNombre,
     get codigo() { return codigo; },
   };
 }

@@ -45,7 +45,7 @@ $('#formUnirse').addEventListener('submit', (e) => {
 // reacciones
 document.querySelectorAll('#reacciones button').forEach((btn) => {
   btn.addEventListener('click', () => {
-    socket.emit('sala:reaccion', { emoji: btn.dataset.emoji });
+    socket.emit('sala:reaccion', { emoji: btn.dataset.emoji, id: miId });
     btn.classList.add('tocado');
     setTimeout(() => btn.classList.remove('tocado'), 260);
   });

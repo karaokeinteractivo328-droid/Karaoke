@@ -634,7 +634,14 @@ body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
   border-radius: 999px;
   box-shadow: 4px 4px 0 var(--rosa);
 }
-#cantandoAhora span { color: var(--rosa-hot); }
+#cantandoAhora #cantandoNombre { color: var(--rosa-hot); }
+#reaccionesContador {
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: 0.75em;
+  letter-spacing: 0.02em;
+}
+#reaccionesContador::before { content: '· '; opacity: 0.6; }
 
 /* ESPERANDO: "te toca" y el cartel libre comparten el layout de .ui,
    por eso son "contents" en vez de cajas propias */
@@ -686,12 +693,29 @@ body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
   overflow: hidden;
   pointer-events: none;
 }
-#reacciones-vuelan span {
+.reaccionVolando {
   position: absolute;
   bottom: -8vh;
-  font-size: clamp(1.6rem, 4vmin, 3rem);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   animation: volar var(--dur, 3s) ease-in forwards;
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.25));
+}
+.reaccionVolando b {
+  font-size: clamp(1.6rem, 4vmin, 3rem);
+  line-height: 1;
+}
+.reaccionVolando small {
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: clamp(0.55rem, 1.3vmin, 0.8rem);
+  color: var(--tinta);
+  background: var(--crema);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-top: 2px;
+  white-space: nowrap;
 }
 @keyframes volar {
   from { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0; }
