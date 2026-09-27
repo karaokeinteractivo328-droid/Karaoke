@@ -376,7 +376,9 @@ async function arrancarCancion(cancion) {
 
   const dur = duracionCancion;
   if (meta?.audio) {
-    audio.src = SOCKET_URL + meta.audio;
+    // el audio puede ser una URL absoluta (Supabase Storage, para que
+    // tambien funcione en la version online) o una ruta local del server.
+    audio.src = /^https?:\/\//.test(meta.audio) ? meta.audio : SOCKET_URL + meta.audio;
     audio.currentTime = 0;
     audio.load();
     audio.play().catch(() => {});

@@ -4,10 +4,10 @@
     "titulo": "Corre",
     "artista": "Jesse & Joy",
     "era": "¿Con quién se queda el perro?",
-    "audio": "/canciones/corre/corre.m4a",
+    "audio": "https://astltpnuvibonrzokhyw.supabase.co/storage/v1/object/public/canciones/corre/corre.m4a",
     "lrc": "/canciones/corre/corre.lrc",
     "duracion": 306,
-    "offsetLetra": 0
+    "offsetLetra": -0.4
   },
   {
     "id": "colgando",
@@ -15,19 +15,49 @@
     "artista": "Carlos Baute & Marta Sánchez",
     "era": "Dúo",
     "voces": "duo",
-    "audio": "/canciones/colgando/colgando.m4a",
+    "audio": "https://astltpnuvibonrzokhyw.supabase.co/storage/v1/object/public/canciones/colgando/colgando.m4a",
     "lrc": "/canciones/colgando/colgando.lrc",
     "duracion": 235,
-    "offsetLetra": 0
+    "offsetLetra": -0.4
   },
   {
     "id": "me-rehuso",
     "titulo": "Me rehúso",
     "artista": "Danny Ocean",
     "era": "Me rehúso",
-    "audio": "/canciones/me-rehuso/me-rehuso.m4a",
+    "audio": "https://astltpnuvibonrzokhyw.supabase.co/storage/v1/object/public/canciones/me-rehuso/me-rehuso.m4a",
     "lrc": "/canciones/me-rehuso/me-rehuso.lrc",
     "duracion": 203,
+    "offsetLetra": -0.4
+  },
+  {
+    "id": "flores-amarillas",
+    "titulo": "Flores Amarillas",
+    "artista": "Floricienta",
+    "era": "Floricienta",
+    "audio": "https://astltpnuvibonrzokhyw.supabase.co/storage/v1/object/public/canciones/flores-amarillas/flores-amarillas.m4a",
+    "lrc": "/canciones/flores-amarillas/flores-amarillas.lrc",
+    "duracion": 239,
+    "offsetLetra": 0
+  },
+  {
+    "id": "baby",
+    "titulo": "Baby",
+    "artista": "Justin Bieber ft. Ludacris",
+    "era": "My World 2.0",
+    "audio": "https://astltpnuvibonrzokhyw.supabase.co/storage/v1/object/public/canciones/baby/baby.m4a",
+    "lrc": "/canciones/baby/baby.lrc",
+    "duracion": 237,
+    "offsetLetra": 7
+  },
+  {
+    "id": "despacito",
+    "titulo": "Despacito",
+    "artista": "Luis Fonsi & Daddy Yankee",
+    "era": "Vida",
+    "audio": "https://astltpnuvibonrzokhyw.supabase.co/storage/v1/object/public/canciones/despacito/despacito.m4a",
+    "lrc": "/canciones/despacito/despacito.lrc",
+    "duracion": 230,
     "offsetLetra": 0
   }
 ]
