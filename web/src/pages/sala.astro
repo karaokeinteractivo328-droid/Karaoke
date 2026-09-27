@@ -46,6 +46,13 @@ import Base from '../layouts/Base.astro';
 
       <button id="btnSalir" class="link">Salir de la fila</button>
     </section>
+
+    <section id="pantallaCopiloto" class="tarjeta" hidden>
+      <p class="kicker">sos el copiloto 🤝</p>
+      <p id="copilotoError" class="error" hidden></p>
+      <p id="copilotoActual" class="letraCopiloto">Esperando que arranque la canción…</p>
+      <p id="copilotoSiguiente" class="letraCopilotoSig"></p>
+    </section>
   </main>
 
   <style>
@@ -174,6 +181,18 @@ import Base from '../layouts/Base.astro';
       border-color: var(--rosa-hot);
     }
     #cancionesLista :global(li.elegida .art) { opacity: 0.85; }
+    .letraCopiloto {
+      font-family: var(--fat);
+      text-transform: uppercase;
+      font-size: 1.5rem;
+      line-height: 1.15;
+    }
+    .letraCopilotoSig {
+      font-family: var(--body);
+      font-weight: 600;
+      opacity: 0.55;
+      font-size: 1rem;
+    }
   </style>
 
   <script>

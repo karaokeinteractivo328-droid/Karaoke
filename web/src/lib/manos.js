@@ -129,8 +129,15 @@ export function crearGestos({ getEstado, onGesto, onManos }) {
       }
     }
 
+    // con hasta 4 manos en pantalla (cantante + copiloto), separamos por
+    // mitad de camara para que un reto de "una mano cada uno" tenga sentido -
+    // es una heuristica por posicion, no reconocimiento real de personas.
+    const manosConLado = manos.map((m) => ({ puntos: m.puntos, lado: ladoDe(m) }));
+
     onManos?.({
-      manos: manos.map((m) => ({ puntos: m.puntos })),
+      manos: manosConLado,
+      manosIzq: manosConLado.filter((m) => m.lado === 'izq'),
+      manosDer: manosConLado.filter((m) => m.lado === 'der'),
       cantidadManos: n,
       corazon,
       pellizco,
@@ -143,6 +150,10 @@ export function crearGestos({ getEstado, onGesto, onManos }) {
 
 function d(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function ladoDe(mano) {
+  return mano.puntos[0].x < 0.5 ? 'izq' : 'der';
 }
 
 function esCorazon(m1, m2) {

@@ -20,6 +20,28 @@ socket.on('estado', (snap) => {
   pintarEstado();
 });
 
+// Link de copiloto (viene del QR que aparece junto al cantante): salta el
+// formulario de siempre y reclama el puesto directo con la clave de la URL.
+const rolUrl = params.get('rol');
+const claveUrl = params.get('clave');
+if (rolUrl === 'copiloto' && codigoUrl && claveUrl) {
+  $('#formUnirse').hidden = true;
+  $('#pantallaEnFila').hidden = true;
+  $('#pantallaCopiloto').hidden = false;
+  socket.emit('sala:copiloto', { codigo: codigoUrl, clave: claveUrl }, (r) => {
+    if (!r?.ok) {
+      $('#copilotoError').hidden = false;
+      $('#copilotoError').textContent = r?.error || 'No se pudo conectar como copiloto.';
+    }
+  });
+}
+
+socket.on('letra-actual', ({ actual, siguiente } = {}) => {
+  if ($('#pantallaCopiloto').hidden) return;
+  $('#copilotoActual').textContent = actual || 'Esperando que arranque la canción…';
+  $('#copilotoSiguiente').textContent = siguiente || '';
+});
+
 $('#formUnirse').addEventListener('submit', (e) => {
   e.preventDefault();
   const codigo = $('#inCodigo').value.trim().toUpperCase();

@@ -666,6 +666,29 @@ body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
 }
 #reaccionesContador::before { content: '· '; opacity: 0.6; }
 
+#copilotoBadge {
+  position: fixed;
+  top: 9.5vmin;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--crema);
+  border: 2px solid var(--tinta);
+  border-radius: 999px;
+  padding: 4px 14px 4px 4px;
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--tinta);
+}
+#copilotoBadge img { width: 34px; height: 34px; border-radius: 6px; }
+#copilotoBadge b { color: var(--rosa-hot); letter-spacing: 0.08em; }
+
 /* ESPERANDO: "te toca" y el cartel libre comparten el layout de .ui,
    por eso son "contents" en vez de cajas propias */
 #turnoLlamado,

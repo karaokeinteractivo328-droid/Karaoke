@@ -30,6 +30,8 @@ export function crearSala({ onCambio } = {}) {
   let llamado = null; // {id, nombre} - el proximo en la fila, ya avisado en pantalla
   let cantando = null; // {id, nombre} - quien esta arriba del escenario ahora
   let timerLlamado = null;
+  let claveCopiloto = null; // clave de esta ronda, para que alguien la reclame
+  let copiloto = null; // {id, nombre} - quien ya la reclamo (un solo lugar)
 
   const emitir = () => onCambio && onCambio(snapshot());
 
@@ -39,6 +41,8 @@ export function crearSala({ onCambio } = {}) {
       fila: fila.map((p) => ({ id: p.id, nombre: p.nombre })),
       llamado: llamado ? { ...llamado } : null,
       cantando: cantando ? { ...cantando } : null,
+      claveCopiloto: cantando ? claveCopiloto : null,
+      copiloto: copiloto ? { ...copiloto } : null,
     };
   }
 
@@ -81,8 +85,25 @@ export function crearSala({ onCambio } = {}) {
     clearTimeout(timerLlamado);
     cantando = llamado;
     llamado = null;
+    copiloto = null;
+    claveCopiloto = cantando ? generarCodigo() : null;
     emitir();
     return cantando; // incluye .preseleccion si lo habia elegido desde el celu
+  }
+
+  // Alguien mando la clave de copiloto de esta ronda desde su celu. Un solo
+  // lugar por ronda: el primero que la manda bien se queda con el puesto.
+  function reclamarCopiloto(clave, nombre) {
+    if (!cantando || !claveCopiloto) return { ok: false, error: 'No hay nadie cantando ahora' };
+    if (copiloto) return { ok: false, error: 'Ya hay alguien ayudando en esta ronda' };
+    if (String(clave || '').trim().toUpperCase() !== claveCopiloto) {
+      return { ok: false, error: 'Clave incorrecta' };
+    }
+    const limpio = String(nombre ?? '').trim().slice(0, 24) || 'Copiloto';
+    const id = Math.random().toString(36).slice(2, 9);
+    copiloto = { id, nombre: limpio };
+    emitir();
+    return { ok: true, id };
   }
 
   // Termino la cancion (o se reseteo a mitad de camino): libera el lugar y
@@ -90,6 +111,8 @@ export function crearSala({ onCambio } = {}) {
   function liberar() {
     if (!cantando) return;
     cantando = null;
+    copiloto = null;
+    claveCopiloto = null;
     llamarSiguiente();
     emitir();
   }
@@ -123,6 +146,7 @@ export function crearSala({ onCambio } = {}) {
     anotarse,
     confirmarTurno,
     preseleccionar,
+    reclamarCopiloto,
     liberar,
     salir,
     buscarNombre,

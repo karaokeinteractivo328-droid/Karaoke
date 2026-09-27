@@ -242,6 +242,22 @@ app.get('/api/qr-sala', async (_req, res) => {
   }
 });
 
+// QR para el "copiloto" de la ronda actual -> /sala?codigo=X&rol=copiloto&clave=Y.
+// Solo tiene sentido mientras alguien esta cantando (la clave es por ronda).
+app.get('/api/qr-copiloto', async (_req, res) => {
+  const { cantando, claveCopiloto } = sala.snapshot();
+  if (!cantando || !claveCopiloto) return res.json({ url: null, dataUrl: null });
+  const frontPort = SERVIR_BUILD ? PORT : WEB_PORT;
+  const base = FRONTEND_PUBLICO || `http://${ipLocal()}:${frontPort}`;
+  const url = `${base}/sala?codigo=${sala.codigo}&rol=copiloto&clave=${claveCopiloto}`;
+  try {
+    const dataUrl = await QRCode.toDataURL(url, { margin: 1, width: 320 });
+    res.json({ url, dataUrl, clave: claveCopiloto });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Frontend compilado (solo con npm start) ------------------------
 if (SERVIR_BUILD) {
   app.use(express.static(DIST));
@@ -323,6 +339,22 @@ io.on('connection', (socket) => {
   });
 
   socket.on('sala:salir', ({ id } = {}) => id && sala.salir(id));
+
+  // Alguien manda la clave de copiloto de la ronda actual desde su celu.
+  socket.on('sala:copiloto', ({ codigo, clave, nombre } = {}, cb) => {
+    if (String(codigo || '').trim().toUpperCase() !== sala.codigo) {
+      return cb?.({ ok: false, error: 'Ese código no existe. Fijate en la pantalla.' });
+    }
+    const r = sala.reclamarCopiloto(clave, nombre);
+    console.log(`[sala] ${rol} reclama copiloto:`, r.ok ? 'OK' : `RECHAZADO (${r.error})`);
+    cb?.(r);
+  });
+
+  // La pantalla manda la linea actual de la letra para el celu del copiloto
+  // (no duplicamos el parseo del .lrc ahi, solo mostramos lo que ya calculo).
+  socket.on('letra-actual', ({ actual, siguiente } = {}) => {
+    io.emit('letra-actual', { actual: actual || '', siguiente: siguiente || '' });
+  });
 
   socket.on('disconnect', () =>
     console.log(`[socket] desconexion (${rol}) ${socket.id}`)

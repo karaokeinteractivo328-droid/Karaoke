@@ -23,7 +23,13 @@ function señalando(p) {
 
 export const RETOS = [
   { icono: '🙌', texto: 'Las dos manos arriba', dur: 5, puntos: 12,
-    ok: (d) => d.cantidadManos >= 2 && d.manos.every((m) => muñecaArriba(m.puntos, 0.45)) },
+    ok: (d) => {
+      const arriba = (m) => muñecaArriba(m.puntos, 0.45);
+      // con copiloto en cuadro (3+ manos), que sea de a uno por lado - si no,
+      // cualquiera de sus dos manos alcanza (el caso de siempre, solo).
+      if (d.cantidadManos >= 3) return (d.manosIzq || []).some(arriba) && (d.manosDer || []).some(arriba);
+      return d.cantidadManos >= 2 && d.manos.every(arriba);
+    } },
   { icono: '💖', texto: 'Hacé un corazón', dur: 6, puntos: 15,
     ok: (d) => d.corazon },
   { icono: '✊', texto: 'Puño bien alto', dur: 5, puntos: 10,

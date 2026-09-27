@@ -116,7 +116,7 @@ navigator.mediaDevices
     audioBus.desbloquear(); // otro intento: a veces el permiso de camara ya cuenta como interaccion
     return crearReconocimiento({
       video,
-      numManos: 2,
+      numManos: 4, // cantante + copiloto, hasta 2 manos cada uno
       onResultado: ({ manos, hayPersona }) => {
         ultimoResultado = performance.now();
         gestos({ manos });
@@ -187,6 +187,7 @@ socket.on('estado', (snap) => {
       if (cambio) {
         contadorReacciones = {}; // arranca de cero para este cantante
         pintarContadorReacciones();
+        pintarQrCopiloto();
       }
       break;
     case 'COUNTDOWN':
@@ -196,7 +197,10 @@ socket.on('estado', (snap) => {
       if (cambio) arrancarCancion(snap.cancion);
       break;
     case 'RESULTADO':
-      if (cambio) mostrarResultado(snap);
+      if (cambio) {
+        mostrarResultado(snap);
+        $('#copilotoBadge').hidden = true;
+      }
       break;
     case 'ESPERANDO':
       if (cambio) detenerCancion();
@@ -263,6 +267,20 @@ function volarReaccion(emoji, nombre) {
   span.innerHTML = `<b>${emoji}</b>${nombre ? `<small>${escapeHtml(nombre)}</small>` : ''}`;
   cont.appendChild(span);
   setTimeout(() => span.remove(), dur * 1000 + 200);
+}
+
+function pintarQrCopiloto() {
+  const badge = $('#copilotoBadge');
+  if (!badge) return;
+  fetch(`${SOCKET_URL}/api/qr-copiloto`)
+    .then((r) => r.json())
+    .then(({ dataUrl, clave }) => {
+      if (!dataUrl) { badge.hidden = true; return; }
+      $('#qrCopiloto').src = dataUrl;
+      $('#copilotoClave').textContent = clave;
+      badge.hidden = false;
+    })
+    .catch(() => { badge.hidden = true; });
 }
 
 function pintarContadorReacciones() {
@@ -427,6 +445,7 @@ function mostrarLinea(idx, forzar = false) {
   const cur = letras[i];
   const sig = [letras[i + 1], letras[i + 2]].find((l) => l?.texto)?.texto || '';
   elSig.textContent = sig;
+  socket.emit('letra-actual', { actual: cur?.texto || '', siguiente: sig });
 
   // color por voz (modo dúo)
   const voz = voces[i] || 'p1';
