@@ -8,10 +8,12 @@
 //   pellizco (pulgar + indice) sostenido  -> confirmar
 //   gesto de corazon (dos manos)          -> efecto
 
-const UMBRAL_PELLIZCO = 0.55; // dist pulgar-indice / tamano de la mano (mas permisivo)
+const UMBRAL_PELLIZCO = 0.65; // dist pulgar-indice / tamano de la mano (mas permisivo)
 const MS_PRESENCIA = 500;
 const MS_CONFIRMAR = 900;
-const MS_SCROLL = 480;
+const MS_TOLERANCIA_PELLIZCO = 250; // ms que puede "perderse" el pellizco sin reiniciar el progreso
+const MS_SCROLL = 350;
+const ZONA_SCROLL = 0.45; // debajo de esto = arriba, arriba de (1-esto) = abajo (zona muerta chica al medio)
 const MS_MODO = 1000;
 const MS_ESTABLE = 220; // la cantidad de manos tiene que mantenerse esto antes de contar
 
@@ -23,6 +25,7 @@ export function crearGestos({ getEstado, onGesto, onManos }) {
     ultimoScroll: 0,
     pinchStart: 0,
     pinchProgress: 0,
+    pinchPerdidoDesde: 0,
     confirmEnviado: false,
     // MODO
     countPend: -1,
@@ -49,6 +52,7 @@ export function crearGestos({ getEstado, onGesto, onManos }) {
       if (estado === 'ESPERANDO') st.presenciaEnviada = false;
       st.pinchStart = 0;
       st.pinchProgress = 0;
+      st.pinchPerdidoDesde = 0;
       st.confirmEnviado = false;
       st.countPend = -1;
       st.countEstable = 0;
@@ -90,6 +94,7 @@ export function crearGestos({ getEstado, onGesto, onManos }) {
       st.manoDesde = 0;
       st.pinchStart = 0;
       st.pinchProgress = 0;
+      st.pinchPerdidoDesde = 0;
       onManos?.({ manos: [], cantidadManos: 0, corazon: false, pinchProgress: 0, gesto: 'sin manos' });
       return;
     }
@@ -98,6 +103,7 @@ export function crearGestos({ getEstado, onGesto, onManos }) {
     const tam = d(kp[0], kp[9]) || 1;
     const pellizco = d(kp[4], kp[8]) / tam < UMBRAL_PELLIZCO;
     const ny = (kp[0].y + kp[9].y) / 2; // centro de la mano, 0 arriba .. 1 abajo
+    const zonaScroll = ny < ZONA_SCROLL ? 'arriba' : ny > 1 - ZONA_SCROLL ? 'abajo' : null;
     let gesto = `${n} mano${n === 1 ? '' : 's'}`;
 
     if (estado === 'ESPERANDO') {
@@ -108,13 +114,13 @@ export function crearGestos({ getEstado, onGesto, onManos }) {
       }
       gesto = 'listo!';
     } else if (estado === 'SELECCIONANDO') {
-      const zona = ny < 0.38 ? 'arriba' : ny > 0.62 ? 'abajo' : null;
-      if (zona && ahora - st.ultimoScroll > MS_SCROLL) {
+      if (zonaScroll && ahora - st.ultimoScroll > MS_SCROLL) {
         st.ultimoScroll = ahora;
-        onGesto({ tipo: 'scroll', direccion: zona });
+        onGesto({ tipo: 'scroll', direccion: zonaScroll });
       }
       if (pellizco) {
         if (!st.pinchStart) st.pinchStart = ahora;
+        st.pinchPerdidoDesde = 0;
         st.pinchProgress = Math.min(1, (ahora - st.pinchStart) / MS_CONFIRMAR);
         if (st.pinchProgress >= 1 && !st.confirmEnviado) {
           st.confirmEnviado = true;
@@ -122,10 +128,14 @@ export function crearGestos({ getEstado, onGesto, onManos }) {
         }
         gesto = `confirmando ${Math.round(st.pinchProgress * 100)}%`;
       } else {
-        st.pinchStart = 0;
-        st.pinchProgress = 0;
-        st.confirmEnviado = false;
-        gesto = zona ? (zona === 'arriba' ? '↑ subiendo' : '↓ bajando') : 'movete arriba/abajo o pellizcá';
+        // tolera un parpadeo corto del tracker sin tirar todo el progreso a 0
+        if (!st.pinchPerdidoDesde) st.pinchPerdidoDesde = ahora;
+        if (ahora - st.pinchPerdidoDesde > MS_TOLERANCIA_PELLIZCO) {
+          st.pinchStart = 0;
+          st.pinchProgress = 0;
+          st.confirmEnviado = false;
+        }
+        gesto = zonaScroll ? (zonaScroll === 'arriba' ? '↑ subiendo' : '↓ bajando') : 'movete arriba/abajo o pellizcá';
       }
     }
 
@@ -142,7 +152,7 @@ export function crearGestos({ getEstado, onGesto, onManos }) {
       corazon,
       pellizco,
       pinchProgress: st.pinchProgress,
-      zonaScroll: estado === 'SELECCIONANDO' ? (ny < 0.38 ? 'arriba' : ny > 0.62 ? 'abajo' : null) : null,
+      zonaScroll: estado === 'SELECCIONANDO' ? zonaScroll : null,
       gesto,
     });
   };
