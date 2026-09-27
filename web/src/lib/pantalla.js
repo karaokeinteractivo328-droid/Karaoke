@@ -57,9 +57,14 @@ let letraRec = { texto: '', hechas: 0, titulo: '' };
 const recCanvas = crearGrabacionCanvas(video, { getLetra: () => letraRec });
 
 const retos = crearRetos({
-  onCartel: pintarReto,
+  onCartel: (reto) => {
+    pintarReto(reto);
+    if (reto?.tipo === 'palabra') taparPalabraProxima();
+    if (!reto) destaparPalabra();
+  },
   onResultado: ({ ok, puntos }) => {
     if (ok) flash('¡BIEN! +' + puntos);
+    destaparPalabra();
   },
 });
 
@@ -433,12 +438,14 @@ const elActual = $('#lineaActual');
 const elSig = $('#lineaSiguiente');
 let palabras = [];
 let lineaRender = -99;
+let palabraTapada = null; // { span, texto, t0 } - la que oculta el reto "adiviná la palabra"
 
 function mostrarLinea(idx, forzar = false) {
   let i = idx;
   while (letras[i] && !letras[i].texto) i++;
   if (!forzar && i === lineaRender && idx >= 0) return;
   lineaRender = i;
+  palabraTapada = null; // la linea se reconstruye entera, la referencia vieja ya no sirve
 
   elActual.innerHTML = '';
   palabras = [];
@@ -479,6 +486,7 @@ function mostrarLinea(idx, forzar = false) {
 }
 
 function pintarPalabras(t) {
+  if (palabraTapada && t >= palabraTapada.t0) destaparPalabra(); // le llego el momento, se revela sola
   if (!palabras.length) return;
   let actual = -1;
   for (let i = 0; i < palabras.length; i++) if (palabras[i].t0 <= t) actual = i;
@@ -488,6 +496,25 @@ function pintarPalabras(t) {
     c.toggle('actual', i === actual);
   }
   if (letraRec.hechas !== actual + 1) letraRec = { ...letraRec, hechas: actual + 1 };
+}
+
+// Reto "adiviná la palabra tapada": oculta una palabra que todavia no se
+// canto (de la linea actual) hasta que la pellizquen o le llegue su momento.
+function taparPalabraProxima() {
+  if (palabraTapada) return;
+  const t = relojBase() - offsetLetra;
+  const candidatas = palabras.filter((p) => p.t0 > t + 0.2);
+  if (!candidatas.length) return;
+  const elegida = candidatas[Math.floor(Math.random() * candidatas.length)];
+  const texto = elegida.span.textContent;
+  palabraTapada = { span: elegida.span, texto, t0: elegida.t0 };
+  elegida.span.textContent = '▧'.repeat(Math.max(2, texto.trim().length)) + ' ';
+}
+
+function destaparPalabra() {
+  if (!palabraTapada) return;
+  palabraTapada.span.textContent = palabraTapada.texto;
+  palabraTapada = null;
 }
 
 function ajustarLetra() {

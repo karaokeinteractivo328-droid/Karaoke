@@ -40,6 +40,11 @@ export const RETOS = [
     ok: (d) => d.manos.some((m) => palmaAbierta(m.puntos) && muñecaArriba(m.puntos, 0.55)) },
   { icono: '👆', texto: 'Señalá al cielo', dur: 5, puntos: 8,
     ok: (d) => d.manos.some((m) => señalando(m.puntos) && m.puntos[8].y < 0.35) },
+  // tipo:'palabra' es especial: pantalla.js tapa una palabra que viene en la
+  // letra mientras este reto esta activo, y la destapa al pellizcar o cuando
+  // llega su momento natural (ver taparPalabraProxima/destaparPalabra).
+  { icono: '🫥', texto: 'Adiviná la palabra tapada (pellizcá)', dur: 6, puntos: 14, tipo: 'palabra',
+    ok: (d) => d.pellizco },
 ];
 
 // Máquina simple de retos para usar dentro del loop de PLAYING.
