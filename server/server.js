@@ -299,6 +299,18 @@ httpServer.listen(PORT, () => {
   console.log(`  Estado inicial     : ${ESTADOS.ESPERANDO}`);
   console.log(`  Canciones cargadas : ${canciones.length}`);
   console.log('  Control: manos (MediaPipe) + voz, desde la camara de la pantalla\n');
+
+  // Chequeo de arranque: si ffmpeg-static no bajo bien su binario (build raro,
+  // restriccion de red, etc.) la conversion de video falla en silencio y solo
+  // se nota semanas despues cuando alguien se queja de que no le llega el mp4.
+  execFile(ffmpegPath || 'ffmpeg', ['-version'], { timeout: 10_000 }, (err, stdout) => {
+    if (err) {
+      console.error(`  [ffmpeg] NO DISPONIBLE (${ffmpegPath}): ${err.message.split('\n')[0]}`);
+      console.error('  [ffmpeg] la conversion de video a mp4 va a fallar hasta que se arregle esto.\n');
+    } else {
+      console.log(`  [ffmpeg] OK: ${stdout.split('\n')[0]}\n`);
+    }
+  });
 });
 
 function ipLocal() {

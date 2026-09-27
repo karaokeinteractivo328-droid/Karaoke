@@ -506,8 +506,15 @@ function mostrarResultado(snap) {
   bajar.hidden = true;
   bajar.textContent = '⏳ preparando tu video…';
   grabacion.detener().then(async (blob) => {
-    if (!blob || !blob.size || !sesionActual) return;
+    if (!blob || !blob.size || !sesionActual) {
+      console.warn('[video] no hay grabación para subir (blob vacío o sin sesión)');
+      bajar.hidden = false;
+      bajar.removeAttribute('href');
+      bajar.textContent = '⚠️ no se pudo grabar el video esta vez';
+      return;
+    }
     bajar.hidden = false;
+    let subioOk = true;
     try {
       await fetch(`${SOCKET_URL}/api/video/${sesionActual}`, {
         method: 'POST',
@@ -515,12 +522,17 @@ function mostrarResultado(snap) {
         body: blob,
       });
     } catch (e) {
+      subioOk = false;
       console.warn('subida de video:', e.message);
     }
-    // esperar a que el mp4 esté listo (el server convierte en segundo plano)
+    // esperar a que el mp4 esté listo (el server convierte en segundo plano;
+    // en Render free la conversión puede tardar bastante más que en local,
+    // asi que damos hasta 5 minutos antes de resignarnos al .webm original)
     const mp4 = `${SOCKET_URL}/video/${sesionActual}.mp4`;
-    for (let i = 0; i < 45; i++) {
+    const INTENTOS = 150; // 150 * 2s = 5 min
+    for (let i = 0; i < INTENTOS; i++) {
       await new Promise((r) => setTimeout(r, 2000));
+      if (i === 30) bajar.textContent = '⏳ todavía preparando tu video, puede tardar unos minutos…';
       try {
         const r = await fetch(mp4);
         if (r.ok) {
@@ -533,7 +545,9 @@ function mostrarResultado(snap) {
     }
     bajar.href = URL.createObjectURL(blob);
     bajar.download = `karaoke-${sesionActual}.webm`;
-    bajar.textContent = '↓ descargar mi video';
+    bajar.textContent = subioOk
+      ? '↓ descargar mi video (original, sin convertir)'
+      : '↓ descargar mi video (no se pudo subir, es el que quedó en tu cámara)';
   });
 }
 
