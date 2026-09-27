@@ -15,6 +15,10 @@ const $ = (s) => document.querySelector(s);
 const body = document.body;
 const video = $('#selfCam');
 const audio = $('#pista');
+// el audio ahora puede venir de otro origen (Supabase Storage) y se conecta
+// al Web Audio API (analizador + grabacion): sin esto el navegador lo trata
+// como opaco y silencia la salida, aunque el archivo tenga CORS habilitado.
+audio.crossOrigin = 'anonymous';
 const socket = conectar('pantalla');
 const SOCKET_URL =
   import.meta.env.PUBLIC_SOCKET_URL ||
