@@ -106,7 +106,10 @@ function aMp4(sesion) {
     '-y',
     '-fflags', '+genpts+igndts', // el webm de MediaRecorder no trae timestamps prolijos
     '-i', webm,
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '25', '-pix_fmt', 'yuv420p',
+    // 'ultrafast': en Render free la CPU es compartida/lenta y un evento en vivo
+    // no puede esperar 3 minutos por cada video; se pierde algo de compresion
+    // (archivos un poco mas grandes) a cambio de convertir bastante mas rapido.
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '160k', '-ar', '44100',
     '-max_muxing_queue_size', '4096',
     '-movflags', '+faststart',
