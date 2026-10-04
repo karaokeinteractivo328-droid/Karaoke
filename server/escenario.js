@@ -31,8 +31,9 @@ export const ESTADOS_P = Object.freeze({
 });
 
 export const CONFIG_BASE = Object.freeze({
-  LLAMADO_MS: 45_000, // tiempo para decir "LISTO" una vez llamado (con cancion elegida)
-  LLAMADO_SIN_CANCION_MS: 75_000, // si ademas le falta elegir la cancion
+  LLAMADO_MS: 60_000, // tiempo para confirmar la cancion con la mano (si ya la dejo preparada)
+  LLAMADO_SIN_CANCION_MS: 90_000, // si ademas la tiene que buscar desde cero
+  LISTO_CELU_DESPUES_MS: 20_000, // respaldo: tras esto el celu tambien puede empezar
   CALLED_DESCONEXION_MS: 30_000, // llamado y sin celu: gracia antes de saltearlo
   EN_FILA_DESCONEXION_MS: 10 * 60_000, // en fila y sin celu (bloqueo de pantalla, etc.)
   PUBLICO_RETENCION_MS: 30 * 60_000, // publico desconectado: se limpia de memoria
@@ -43,9 +44,6 @@ export const CONFIG_BASE = Object.freeze({
   CANTANTE_DESCONEXION_MS: 25_000, // cantando y sin celu => abandono
   PANTALLA_DESCONEXION_MS: 15_000, // pantalla caida en plena performance
   SIN_PERSONA_MS: 45_000, // camara sana y nadie en cuadro => abandono
-  AUTOSTART_CAMARA: true,
-  PRESENCIA_AUTOSTART_MS: 1_500,
-  AUTOSTART_MIN_DESDE_LLAMADO_MS: 6_000,
   FILA_MAX: 30,
   PARTICIPANTES_MAX: 500,
   REACC_MIN_MS: 250, // 4 por segundo por persona
@@ -328,6 +326,30 @@ export function crearEscenario({
       return { ok: false, error: 'Todavía no es tu turno' };
     }
     if (!p.cancionId) return { ok: false, error: 'Elegí una canción primero' };
+    if (!puedeListoCelu(ahora())) {
+      return { ok: false, error: 'Confirmá tu canción con la mano en la pantalla' };
+    }
+    p.ultimaActividad = ahora();
+    empezarCountdown(p);
+    emitirSiCambio();
+    return { ok: true };
+  }
+
+  // La cancion se elige y se confirma CON LA MANO en la pantalla (subir/bajar y
+  // pellizcar). El celu solo la deja preparada de antemano, y sirve de respaldo
+  // si no hay camara (o si pasan unos segundos y la mano no responde): el
+  // escenario nunca depende de un unico canal.
+  function puedeListoCelu(t) {
+    if (!actual || etapa !== ETAPAS.CALLING) return false;
+    return !camaraSana(t) || t >= actual.llamadoDesde + C.LISTO_CELU_DESPUES_MS;
+  }
+
+  function pantallaConfirmar({ cancionId } = {}) {
+    if (etapa !== ETAPAS.CALLING || !actual) return { ok: false, error: 'No hay nadie para confirmar' };
+    const p = participantes.get(actual.token);
+    if (!p) return { ok: false, error: 'Sesión no encontrada' };
+    if (!porId(cancionId)) return { ok: false, error: 'Esa canción no existe' };
+    p.cancionId = cancionId;
     p.ultimaActividad = ahora();
     empezarCountdown(p);
     emitirSiCambio();
@@ -426,17 +448,21 @@ export function crearEscenario({
   }
 
   // ---------------------------------------------------- eventos de la pantalla
-  function pantallaConectada({ camara = true, mic = true, audio = true } = {}) {
+  // `reconexion`: la MISMA pagina volvio tras un corte de red (conserva su
+  // cancion, su grabacion y su reloj) -> no se interrumpe nada. Una pagina
+  // nueva (recarga o navegador reiniciado) no puede retomar a medio camino.
+  function pantallaConectada({ camara = true, mic = true, audio = true, reconexion = false } = {}) {
     pantalla.conectada = true;
     pantalla.desconectadaDesde = null;
-    pantalla.camara = !!camara;
-    pantalla.mic = !!mic;
-    pantalla.audio = !!audio;
-    pantalla.hayPersonaDesde = null;
-    pantalla.ultimoTickCamara = 0;
-    // la pagina nueva no puede retomar una performance a medio camino
-    if (etapa === ETAPAS.COUNTDOWN || etapa === ETAPAS.PLAYING) {
-      finalizar({ interrumpida: true, motivo: 'Se reinició la pantalla' });
+    if (!reconexion) {
+      pantalla.camara = !!camara;
+      pantalla.mic = !!mic;
+      pantalla.audio = !!audio;
+      pantalla.hayPersonaDesde = null;
+      pantalla.ultimoTickCamara = 0;
+      if (etapa === ETAPAS.COUNTDOWN || etapa === ETAPAS.PLAYING) {
+        finalizar({ interrumpida: true, motivo: 'Se reinició la pantalla' });
+      }
     }
     marcar();
     emitirSiCambio();
@@ -617,7 +643,8 @@ export function crearEscenario({
       nombre: p?.nombre || 'Alguien',
       cancion: cancionPublica(actual.cancionId),
       modo: actual.modo,
-      fase: etapa === ETAPAS.CALLING ? (actual.cancionId ? 'esperando-listo' : 'eligiendo') : null,
+      fase: etapa === ETAPAS.CALLING ? 'eligiendo' : null,
+      preparada: !!actual.cancionId,
       llamadoDesde: actual.llamadoDesde,
       llamadoHasta: actual.llamadoHasta,
       countdownHasta: actual.countdownHasta,
@@ -668,6 +695,7 @@ export function crearEscenario({
       codigoCopiloto: enJuego ? p.codigoCopiloto : null,
       copiloto: p.copiloto ? { nombre: participantes.get(p.copiloto)?.nombre || 'Copiloto' } : null,
       copilotoDe: singer ? { nombre: singer.nombre, estado: singer.estado } : null,
+      listoCeluDesde: p.estado === ESTADOS_P.CALLED && actual?.token === token && etapa === ETAPAS.CALLING ? actual.llamadoDesde + C.LISTO_CELU_DESPUES_MS : null,
       mensaje: p.mensaje,
       resultado: p.estado === ESTADOS_P.DONE ? p.ultimoResultado : null,
       videoToken: p.estado === ESTADOS_P.DONE ? p.ultimoVideoToken : null,
@@ -725,16 +753,6 @@ export function crearEscenario({
           avanzar();
         } else if (t >= actual.llamadoHasta) {
           cancelarLlamado(p, 'Se acabó el tiempo: perdiste tu turno');
-        } else if (
-          C.AUTOSTART_CAMARA &&
-          p.cancionId &&
-          p.conectado &&
-          camaraSana(t) &&
-          pantalla.hayPersonaDesde &&
-          t - pantalla.hayPersonaDesde >= C.PRESENCIA_AUTOSTART_MS &&
-          t - actual.llamadoDesde >= C.AUTOSTART_MIN_DESDE_LLAMADO_MS
-        ) {
-          empezarCountdown(p);
         }
         break;
       }
@@ -794,6 +812,7 @@ export function crearEscenario({
     pantallaSalud,
     pantallaPresencia,
     pantallaRetos,
+    pantallaConfirmar,
     pantallaFin,
     reinicioSeguro,
     // lectura

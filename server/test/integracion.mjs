@@ -23,8 +23,7 @@ const server = spawn(process.execPath, [join(dir, '..', 'server.js')], {
       RESULT_MS: 2000,
       RESULT_INTERRUMPIDO_MS: 1500,
       CALLED_DESCONEXION_MS: 1500,
-      AUTOSTART_CAMARA: false,
-    }),
+        }),
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -88,8 +87,10 @@ try {
   ok(iara.yo?.estado === 'CALLED', 'su celu pasa a CALLED');
   const el = await iara.emitAck('cancion:elegir', { cancionId: 'corre', modo: 'solo' });
   ok(el.ok, 'elige canción');
-  const li = await iara.emitAck('turno:listo', {});
-  ok(li.ok, 'toca LISTO');
+  ok(pantalla.estado.actual?.preparada === true, 'la pantalla sabe que dejó una canción preparada');
+  const hand = await iara.emitAck('turno:listo', {});
+  ok(hand.ok, 'sin cámara sana, el celu puede empezar (respaldo)');
+  // (en el flujo normal la confirma la mano: pantalla:confirmar)
   await hasta(() => pantalla.estado?.etapa === 'PLAYING', 4000, 'PLAYING');
   ok(pantalla.estado?.etapa === 'PLAYING', 'COUNTDOWN -> PLAYING solo');
   ok(!!pantalla.estado?.privado, 'la pantalla primaria recibe datos privados');
@@ -141,12 +142,20 @@ try {
   ok(iara.yo?.estado === 'DONE' && !!iara.yo?.videoToken, 'Iara ve su resultado y tiene su link de video privado');
   await hasta(() => pantalla.estado?.etapa === 'CALLING', 4000, 'siguiente llamado');
   ok(pantalla.estado.actual?.nombre === orden[0], 'pasa automáticamente al siguiente (ya tenía canción)');
-  ok(pantalla.estado.actual.fase === 'esperando-listo', 'su canción ya estaba preparada');
+  ok(pantalla.estado.actual.preparada === true && pantalla.estado.actual.cancion?.id === 'baby', 'su canción ya estaba preparada (la confirma con la mano)');
+  pantalla.emit('pantalla:confirmar', { cancionId: 'baby' });
+  await hasta(() => ['COUNTDOWN', 'PLAYING'].includes(pantalla.estado?.etapa), 2000, 'arranca con la mano');
+  ok(['COUNTDOWN', 'PLAYING'].includes(pantalla.estado.etapa), 'la mano en la pantalla confirma y arranca');
+  await hasta(() => pantalla.estado?.etapa === 'PLAYING', 3000, 'PLAYING 2');
+  pantalla.emit('pantalla:fin', { progreso: 1 });
+  await hasta(() => pantalla.estado?.etapa === 'RESULT', 2000, 'RESULT 2');
+  await hasta(() => pantalla.estado?.etapa === 'CALLING', 4000, 'CALLING con el tercero');
 
   console.log('\n== Caso 4/8: el llamado pierde la conexión -> se libera y sigue el que espera');
-  primera.disconnect();
-  await hasta(() => pantalla.estado?.actual?.nombre === (orden[1]), 5000, 'pasa al siguiente');
-  ok(pantalla.estado.actual?.nombre === orden[1], 'se saltea al desconectado y llama al siguiente (sin pasar por STANDBY)');
+  ok(pantalla.estado.actual?.nombre === orden[1], 'el tercero de la fila ya fue llamado tras la 2da performance');
+  segunda.disconnect();
+  await hasta(() => pantalla.estado?.etapa === 'STANDBY', 6000, 'STANDBY tras perder al llamado');
+  ok(pantalla.estado?.etapa === 'STANDBY', 'se saltea al desconectado (nadie más espera: STANDBY)');
 
   console.log('\n== Caso 7: nadie responde -> vuelve a STANDBY');
   await hasta(() => pantalla.estado?.etapa === 'STANDBY', 8000, 'STANDBY');

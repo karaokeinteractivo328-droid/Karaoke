@@ -75,6 +75,7 @@ const canciones = await cargarCanciones();
 
 // --- Sockets y sesiones --------------------------------------------------
 let pantallaPrimaria = null; // socket.id de la pantalla grande "de verdad"
+let pantallaPid = ''; // id de carga de pagina de esa pantalla (distingue reconexion de recarga)
 const tokenPorSocket = new Map(); // socket.id -> token del participante
 const socketsPorToken = new Map(); // token -> Set(socket.id) (puede tener 2 pestañas)
 const videoTokens = new Map(); // videoToken -> cuando se creo (habilita la subida)
@@ -332,9 +333,13 @@ io.on('connection', (socket) => {
   // quedan como espejo (solo muestran, no pueden mandar fin/letra/salud).
   if (rol === 'pantalla') {
     const anterior = pantallaPrimaria && io.sockets.sockets.get(pantallaPrimaria);
+    const pid = String(socket.handshake.query.pid || '');
+    // misma pagina que volvio de un corte de red (socket nuevo, mismo pid)
+    const reconexion = !!pid && pid === pantallaPid;
     pantallaPrimaria = socket.id;
-    anterior?.emit('pantalla:espejo');
-    escenario.pantallaConectada({});
+    pantallaPid = pid;
+    if (anterior && anterior.id !== socket.id) anterior.emit('pantalla:espejo');
+    escenario.pantallaConectada({ reconexion });
   }
   socket.emit('estado', socket.id === pantallaPrimaria ? { ...escenario.snapshot(), privado: escenario.privadoPantalla() } : escenario.snapshot());
 
@@ -380,6 +385,8 @@ io.on('connection', (socket) => {
   socket.on('pantalla:presencia', soloPantalla(({ hay } = {}) => escenario.pantallaPresencia(!!hay)));
   socket.on('pantalla:retos', soloPantalla(({ puntos } = {}) => escenario.pantallaRetos(Number(puntos))));
   socket.on('pantalla:fin', soloPantalla(({ progreso } = {}) => escenario.pantallaFin({ progreso: Number(progreso) })));
+  // la cancion se confirma con la mano, en el escenario
+  socket.on('pantalla:confirmar', soloPantalla(({ cancionId } = {}) => escenario.pantallaConfirmar({ cancionId })));
   socket.on('pantalla:reiniciar', soloPantalla(() => escenario.reinicioSeguro()));
   // la linea de letra actual, para el teleprompter del copiloto
   socket.on('pantalla:letra', soloPantalla(({ actual, siguiente } = {}) => {

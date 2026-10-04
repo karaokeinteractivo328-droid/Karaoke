@@ -42,8 +42,8 @@ function mundo(config = {}) {
 
 // lleva a `token` de CALLING a PLAYING
 function aEscenario(m, token, cancionId = 'a') {
-  m.e.elegirCancion(token, cancionId, 'solo');
-  assert.equal(m.e.listo(token).ok, true);
+  m.e.elegirCancion(token, cancionId, 'solo'); // la deja preparada desde el celu
+  assert.equal(m.e.pantallaConfirmar({ cancionId }).ok, true); // y la confirma con la mano
   m.avanzar(m.e.config.COUNTDOWN_S * 1000);
   assert.equal(m.e.etapa, ETAPAS.PLAYING);
 }
@@ -57,9 +57,12 @@ test('caso 1: llego y nadie canta -> soy el primero, elijo, canto, resultado, vu
   assert.equal(m.e.snapshot().actual.nombre, 'Iara');
   assert.equal(m.e.snapshot().actual.fase, 'eligiendo');
   assert.equal(m.e.listo(iara).ok, false, 'sin cancion no puede empezar');
+  assert.equal(m.e.etapa, ETAPAS.CALLING);
   m.e.elegirCancion(iara, 'a', 'solo');
-  assert.equal(m.e.snapshot().actual.fase, 'esperando-listo');
-  assert.equal(m.e.listo(iara).ok, true);
+  assert.equal(m.e.snapshot().actual.preparada, true);
+  assert.equal(m.e.snapshot().actual.fase, 'eligiendo', 'sigue pendiente la confirmacion con la mano');
+  assert.equal(m.e.pantallaConfirmar({ cancionId: 'zzz' }).ok, false, 'cancion inexistente');
+  assert.equal(m.e.pantallaConfirmar({ cancionId: 'a' }).ok, true, 'la mano confirma');
   assert.equal(m.e.etapa, ETAPAS.COUNTDOWN);
   m.avanzar(3000);
   assert.equal(m.e.etapa, ETAPAS.PLAYING);
@@ -101,7 +104,8 @@ test('caso 3: quiero ser el proximo -> elijo cancion ya y queda preparada', () =
   assert.equal(m.e.snapshot().actual.nombre, 'B');
   assert.equal(m.e.snapshot().actual.cancion.id, 'c');
   assert.equal(m.e.snapshot().actual.modo, 'duo');
-  assert.equal(m.e.listo(b).ok, true, 'ya tenia la cancion: solo confirma');
+  assert.equal(m.e.snapshot().actual.preparada, true, 'la cancion llega preparada: solo la confirma con la mano');
+  assert.equal(m.e.pantallaConfirmar({ cancionId: 'c' }).ok, true);
 });
 
 test('caso 4: el primero pierde conexion -> gracia, si vuelve retoma, si no se libera', () => {
@@ -310,6 +314,20 @@ test('recuperacion: pantalla recargada en plena performance -> se cierra y sigue
   assert.equal(m.e.snapshot().actual.nombre, 'B');
 });
 
+test('recuperacion: la MISMA pagina vuelve de un corte de red -> no se interrumpe nada', () => {
+  const m = mundo();
+  const a = m.persona(1, 'A');
+  m.e.pantallaConectada({});
+  m.e.entrarFila(a);
+  aEscenario(m, a);
+  m.e.pantallaDesconectada();
+  m.avanzar(5000);
+  m.e.pantallaConectada({ reconexion: true });
+  assert.equal(m.e.etapa, ETAPAS.PLAYING, 'sigue cantando');
+  m.avanzar(m.e.config.PANTALLA_DESCONEXION_MS + 5000);
+  assert.equal(m.e.etapa, ETAPAS.PLAYING, 'y el watchdog ya no la da por caida');
+});
+
 test('recuperacion: pantalla caida y nunca vuelve -> el watchdog cierra', () => {
   const m = mundo();
   const a = m.persona(1, 'A');
@@ -356,25 +374,38 @@ test('recuperacion: camara sana y nadie en cuadro -> abandono; sin camara no se 
   assert.equal(m2.e.etapa, ETAPAS.PLAYING, 'sin camara no se abandona por falta de persona');
 });
 
-test('autostart por camara: el llamado con cancion arranca solo si la camara lo ve parado', () => {
+test('mano principal, celu de respaldo: el LISTO del celu solo vale sin camara o pasados unos segundos', () => {
   const m = mundo();
   const a = m.persona(1, 'A');
   m.e.pantallaConectada({ camara: true });
   m.e.entrarFila(a);
   m.e.elegirCancion(a, 'a');
-  for (let i = 0; i < 12; i++) {
-    m.e.pantallaPresencia(true);
-    m.avanzar(1000);
-  }
-  assert.ok([ETAPAS.COUNTDOWN, ETAPAS.PLAYING].includes(m.e.etapa), 'arranco solo');
+  m.e.pantallaPresencia(true); // la camara esta sana y viendo
+  assert.equal(m.e.listo(a).ok, false, 'con camara sana hay que usar la mano');
+  assert.match(m.e.listo(a).error, /mano/);
+  assert.ok(m.e.yo(a).listoCeluDesde > m.t);
+  m.avanzar(m.e.config.LISTO_CELU_DESPUES_MS - 1000);
+  m.e.pantallaPresencia(true);
+  assert.equal(m.e.listo(a).ok, false);
+  m.avanzar(2000);
+  m.e.pantallaPresencia(true);
+  assert.equal(m.e.listo(a).ok, true, 'pasados los segundos, el celu empieza (nunca se traba)');
 
   const m2 = mundo();
   const b = m2.persona(1, 'B');
   m2.e.pantallaConectada({ camara: false });
   m2.e.entrarFila(b);
   m2.e.elegirCancion(b, 'a');
-  for (let i = 0; i < 12; i++) { m2.e.pantallaPresencia(true); m2.avanzar(1000); }
-  assert.equal(m2.e.etapa, ETAPAS.CALLING, 'sin camara solo arranca con LISTO del celu');
+  assert.equal(m2.e.listo(b).ok, true, 'sin camara el celu empieza de una');
+});
+
+test('nadie mas que la pantalla primaria confirma con la mano (server.js lo filtra) y solo en CALLING', () => {
+  const m = mundo();
+  assert.equal(m.e.pantallaConfirmar({ cancionId: 'a' }).ok, false, 'sin nadie llamado no hay nada que confirmar');
+  const a = m.persona(1, 'A');
+  m.e.entrarFila(a);
+  aEscenario(m, a);
+  assert.equal(m.e.pantallaConfirmar({ cancionId: 'b' }).ok, false, 'ya esta cantando');
 });
 
 test('reinicio seguro: cierra la performance y deja el sistema consistente', () => {

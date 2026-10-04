@@ -99,7 +99,7 @@ audioBus.desbloquear();
 
 function frame() {
   fondo.latir(audioBus.tick());
-  camara.dibujar(datosManos);
+  camara.dibujar(datosManos, seleccionActiva());
   if (grabacion.grabando) recCanvas.dibujar();
   requestAnimationFrame(frame);
 }
@@ -112,6 +112,9 @@ let deteccionOk = false; // MediaPipe cargo y esta dando resultados
 let ultimaPresenciaEmit = 0;
 
 const gestos = crearGestos({
+  getSeleccionActiva: () => seleccionActiva(),
+  onScroll: (dir) => moverSeleccion(dir === 'arriba' ? -1 : 1),
+  onConfirmar: () => confirmarConLaMano(),
   onManos: (d) => {
     datosManos = d;
     fondo.setModo(
@@ -230,7 +233,7 @@ socket.on('estado', (s) => {
       break;
     case 'CALLING':
       if (cambio) detenerCancion();
-      pintarCalling(s);
+      pintarCalling(s, cambio);
       break;
     case 'COUNTDOWN':
       $('#cuenta').textContent = s.actual?.cuenta ?? 3;
@@ -255,15 +258,73 @@ setInterval(() => {
   $('#turnoBarra span').style.width = (resto * 100).toFixed(1) + '%';
 }, 200);
 
-function pintarCalling(s) {
+// --- CALLING: la cancion se elige CON LA MANO -------------------------------
+// subir/bajar mueve el resaltado, pellizco sostenido confirma. Si la persona ya
+// dejo una cancion preparada desde el celu, el resaltado arranca ahi.
+let indiceSel = 0;
+let manoTocada = false; // si ya movio el resaltado con la mano, el celu no se lo pisa
+let confirmando = false;
+
+function seleccionActiva() {
+  return etapaActual === 'CALLING' && !espejo && camaraOk === true && deteccionOk && catalogoFull.length > 0;
+}
+
+function pintarLista() {
+  const ul = $('#lista');
+  if (ul.children.length !== catalogoFull.length) {
+    ul.innerHTML = '';
+    catalogoFull.forEach((c) => {
+      const li = document.createElement('li');
+      const duo = c.voces === 'duo' ? ' <b class="tag-duo">dúo</b>' : '';
+      li.innerHTML = `${escapeHtml(c.titulo)} <span class="art">${escapeHtml(c.artista)}</span>${duo}<span class="prep" hidden>✓ PREPARADA</span>`;
+      ul.appendChild(li);
+    });
+  }
+  const prepId = snap?.actual?.preparada ? snap.actual.cancion?.id : null;
+  [...ul.children].forEach((li, k) => {
+    li.classList.toggle('activa', k === indiceSel);
+    li.querySelector('.prep').hidden = catalogoFull[k]?.id !== prepId;
+  });
+  ul.children[indiceSel]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+function moverSeleccion(dir) {
+  const n = catalogoFull.length;
+  if (!n) return;
+  manoTocada = true;
+  indiceSel = (indiceSel + dir + n) % n;
+  pintarLista();
+}
+
+function confirmarConLaMano() {
+  const c = catalogoFull[indiceSel];
+  if (!c || confirmando) return;
+  confirmando = true;
+  flash('¡ELEGIDA!');
+  socket.emit('pantalla:confirmar', { cancionId: c.id });
+}
+
+function pintarCalling(s, cambio) {
   const a = s.actual;
   if (!a) return;
   $('#turnoNombre').textContent = a.nombre;
-  $('#turnoCancion').textContent = a.cancion
-    ? `${a.cancion.titulo} · ${a.cancion.artista}${a.modo === 'duo' ? ' · DÚO' : ''}`
-    : '';
-  $('#turnoFase').textContent =
-    a.fase === 'eligiendo' ? 'Está eligiendo su canción…' : 'Acercate al escenario y tocá LISTO en tu celu';
+  const modo = $('#turnoModo');
+  modo.hidden = a.modo !== 'duo';
+  modo.textContent = 'dúo';
+  if (cambio) {
+    confirmando = false;
+    manoTocada = false;
+    indiceSel = Math.max(0, catalogoFull.findIndex((c) => c.id === a.cancion?.id));
+  } else if (!manoTocada && a.cancion) {
+    const k = catalogoFull.findIndex((c) => c.id === a.cancion.id);
+    if (k >= 0) indiceSel = k; // la dejo preparada desde el celu mientras tanto
+  }
+  pintarLista();
+  $('#turnoFase').textContent = seleccionActiva()
+    ? 'Mano arriba / abajo para elegir · pellizcá para confirmar'
+    : camaraOk === false
+      ? 'Sin cámara: elegí y tocá EMPEZAR desde tu celular'
+      : 'Elegí tu canción con la mano';
 }
 
 // "🎤 NOMBRE · ❤️3 🔥1" solo mientras alguien canta

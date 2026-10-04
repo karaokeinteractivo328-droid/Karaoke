@@ -57,9 +57,10 @@ import Base from '../layouts/Base.astro';
 
   <!-- CALLING: se llamó al siguiente -->
   <section class="ui" data-estado="CALLING">
-    <p class="kicker" id="turnoKicker">Turno de</p>
+    <p class="kicker">Turno de</p>
     <h2 class="cartel" id="turnoNombre">Nombre</h2>
-    <p class="lead" id="turnoCancion"></p>
+    <p class="kicker" id="turnoModo" hidden></p>
+    <ul id="lista"></ul>
     <p class="hint" id="turnoFase"></p>
     <div id="turnoBarra"><span></span></div>
   </section>
