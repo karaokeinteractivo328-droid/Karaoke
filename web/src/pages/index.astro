@@ -17,70 +17,51 @@ import Base from '../layouts/Base.astro';
   <audio id="pista" preload="auto"></audio>
 
   <header id="marca">karaoke <span>studio</span></header>
-  <div id="vozBox">🎙️ <span id="vozStatus">iniciando…</span></div>
-  <div id="gestoHUD" hidden>✋ <span id="gestoTxt"></span></div>
+
+  <!-- salud de la instalación: solo aparece si algo falla -->
+  <div id="chips">
+    <span class="chip" id="chipCamara" hidden>📷 sin cámara</span>
+    <span class="chip" id="chipMic" hidden>🎙️ sin micrófono</span>
+    <button class="chip" id="chipAudio" hidden>🔇 tocá la pantalla para activar el sonido</button>
+    <span class="chip" id="chipEspejo" hidden>🪞 pantalla espejo (otra pantalla tiene el control)</span>
+    <span class="chip" id="chipSinServer" hidden>📡 reconectando…</span>
+  </div>
+
   <div id="feedbackFlash"></div>
   <div id="reacciones-vuelan"></div>
 
-  <!-- sala: código para sumarse + fila, visible en casi todos lados -->
-  <div id="salaBadge">
-    <span class="kicker">sala</span>
-    <span id="salaCodigo">----</span>
-  </div>
+  <!-- quién canta ahora + reacciones (solo durante la performance) -->
   <div id="cantandoAhora" hidden>🎤 <span id="cantandoNombre"></span><span id="reaccionesContador" hidden></span></div>
-  <div id="copilotoBadge" hidden>
-    <img id="qrCopiloto" alt="QR para ser el copiloto de esta ronda" />
-    <span>copiloto <b id="copilotoClave">----</b></span>
+
+  <!-- el único dato de la fila que vive en la pantalla grande -->
+  <div id="siguiente" hidden>
+    <span class="kicker">sigue</span>
+    <b id="siguienteNombre"></b>
+    <small id="siguienteMas"></small>
   </div>
 
-  <!-- ESPERANDO -->
-  <section class="ui" data-estado="ESPERANDO">
-    <div id="turnoLlamado" hidden>
-      <p class="kicker">¡Te toca!</p>
-      <h2 class="cartel" id="turnoNombre">Nombre</h2>
-      <p class="hint">Levantá la mano cuando estés lista/o</p>
+  <!-- STANDBY: nadie cantando ni esperando -->
+  <section class="ui" data-estado="STANDBY">
+    <p class="kicker">Sentite un cantante profesional</p>
+    <h1 class="cartel">Viví tu<br>era <span class="script">popstar</span></h1>
+    <div id="qrBox" class="tarjetaQR">
+      <img id="qrSala" alt="QR para participar desde el celular" />
+      <p class="qrTitulo">Escaneá el QR para participar</p>
+      <p class="hint" id="qrUrl"></p>
     </div>
-    <div id="esperandoLibre">
-      <p class="kicker">Sentite un cantante profesional</p>
-      <h1 class="cartel">Viví tu<br>era <span class="script">popstar</span></h1>
-      <p class="hint">Levantá la mano o decí "cantar"</p>
+    <div id="topNoche" hidden>
+      <p class="kicker">los mejores de la noche</p>
+      <ol id="topNocheLista"></ol>
     </div>
-    <div id="salaQR" class="tarjetaQR">
-      <img id="qrSala" alt="QR para sumarte a la sala desde el celu" />
-      <p class="hint">Escaneá para anotarte a la fila</p>
-    </div>
-    <ul id="filaLista"></ul>
   </section>
 
-  <!-- MODO: solo o dúo -->
-  <section class="ui" data-estado="MODO">
-    <p class="kicker">¿Cómo cantás?</p>
-    <div id="modoSel">
-      <div class="opc" data-opc="solo">
-        <span class="op-icono">🙋</span>
-        <span class="op-txt">SOLO</span>
-      </div>
-      <div class="opc" data-opc="duo">
-        <span class="op-icono">🙌</span>
-        <span class="op-txt">DÚO</span>
-        <span class="op-sub">competencia</span>
-      </div>
-    </div>
-    <p class="hint">1 mano = solo · 2 manos = dúo · o decilo · mantené para elegir</p>
-  </section>
-
-  <!-- SELECCIONANDO -->
-  <section class="ui" data-estado="SELECCIONANDO">
-    <p class="kicker">Elegí</p>
-    <h2 class="cartel">Tu canción</h2>
-    <ul id="lista"></ul>
-    <p class="hint">Mano arriba / abajo o decí el nombre · pellizcá para confirmar</p>
-  </section>
-
-  <!-- CONFIRMADA -->
-  <section class="ui" data-estado="CONFIRMADA">
-    <h2 class="cartel">Preparate</h2>
-    <p class="lead" id="confTitulo"></p>
+  <!-- CALLING: se llamó al siguiente -->
+  <section class="ui" data-estado="CALLING">
+    <p class="kicker" id="turnoKicker">Turno de</p>
+    <h2 class="cartel" id="turnoNombre">Nombre</h2>
+    <p class="lead" id="turnoCancion"></p>
+    <p class="hint" id="turnoFase"></p>
+    <div id="turnoBarra"><span></span></div>
   </section>
 
   <!-- COUNTDOWN -->
@@ -88,7 +69,7 @@ import Base from '../layouts/Base.astro';
     <div id="cuenta">3</div>
   </section>
 
-  <!-- PLAYING -->
+  <!-- PLAYING: prioridad absoluta al cantante -->
   <section class="ui" data-estado="PLAYING">
     <div id="letra">
       <p id="lineaActual"></p>
@@ -102,18 +83,21 @@ import Base from '../layouts/Base.astro';
   </section>
   <div id="progreso" hidden><span></span></div>
 
-  <!-- RESULTADO -->
-  <section class="ui" data-estado="RESULTADO">
-    <h1 class="cartel">Un éxito, <span class="script">popstar</span></h1>
+  <!-- RESULT -->
+  <section class="ui" data-estado="RESULT">
+    <h1 class="cartel" id="resultadoTitulo">¡Sos una <span class="script">popstar</span>!</h1>
+    <p class="kicker" id="resultadoMsg" hidden></p>
     <div id="resultadoRow">
-      <div id="score">0</div>
-      <div id="qrMarco"><img id="qrResultado" alt="QR para descargar tu video" /></div>
-    </div>
-    <a id="bajarVideo" hidden download="mi-karaoke.webm">↓ descargar mi video</a>
-    <p class="hint">Escaneá el QR para llevarte tu video</p>
-    <div id="leaderboardBox" hidden>
-      <p class="kicker">mejores puntajes</p>
-      <ol id="leaderboard"></ol>
+      <div id="scoreBox">
+        <div id="score">0</div>
+        <p class="kicker">puntos</p>
+        <p id="desglose"></p>
+        <p id="resumenReacciones"></p>
+      </div>
+      <div id="qrMarco">
+        <img id="qrResultado" alt="QR para descargar tu video" />
+        <p class="hint">Escaneá para descargar tu video</p>
+      </div>
     </div>
   </section>
 

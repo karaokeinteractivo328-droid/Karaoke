@@ -1,10 +1,18 @@
-import { conectar } from './socket.js';
+// La pantalla grande: un ESCENARIO. Muestra siempre lo mismo, sea quien sea el
+// que cante, y se maneja desde los celulares. La camara solo alimenta los
+// retos de gestos (y, opcionalmente, ve que alguien llego al escenario).
+//
+// El estado manda el servidor (server/escenario.js):
+//   STANDBY -> CALLING -> COUNTDOWN -> PLAYING -> RESULT -> (CALLING | STANDBY)
+// Esta pagina reproduce la cancion y la letra, graba el video y le avisa al
+// server cuando termino y como le fue con los retos.
+
+import { conectar, SOCKET_URL } from './socket.js';
 import { parsearLRC, indiceActual } from './lrc.js';
 import { crearReconocimiento } from './vision.js';
 import { crearGestos } from './manos.js';
-import { crearVoz } from './voz.js';
 import { crearAudioBus } from './audioBus.js';
-import { crearEscenario } from './escenario.js';
+import { crearEscenario as crearFondo } from './escenario.js';
 import { crearCamara } from './camaraCanvas.js';
 import { crearGrabacion } from './grabacion.js';
 import { crearGrabacionCanvas } from './grabacionCanvas.js';
@@ -15,46 +23,55 @@ const $ = (s) => document.querySelector(s);
 const body = document.body;
 const video = $('#selfCam');
 const audio = $('#pista');
-// el audio ahora puede venir de otro origen (Supabase Storage) y se conecta
-// al Web Audio API (analizador + grabacion): sin esto el navegador lo trata
-// como opaco y silencia la salida, aunque el archivo tenga CORS habilitado.
+// el audio puede venir de otro origen (Supabase Storage) y se conecta al Web
+// Audio API (analizador + grabacion): sin esto el navegador lo trata como
+// opaco y silencia la salida, aunque el archivo tenga CORS habilitado.
 audio.crossOrigin = 'anonymous';
-const socket = conectar('pantalla');
-const SOCKET_URL =
-  import.meta.env.PUBLIC_SOCKET_URL ||
-  (import.meta.env.DEV ? `http://${location.hostname}:3000` : location.origin);
 
-let estadoActual = 'ESPERANDO';
-let estadoPrevio = null;
+// id de esta carga de pagina: si el socket se corta y vuelve, el server sabe
+// que es la misma pantalla (no interrumpe la cancion); si se recarga, es otra.
+const PID = crypto.randomUUID?.() || String(Math.random()).slice(2);
+const socket = conectar('pantalla', { pid: PID });
+
+const EMOJI = { corazon: '❤️', fuego: '🔥', aplauso: '👏' };
+
+let snap = null;
+let etapaActual = 'STANDBY';
+let etapaPrevia = null;
 let modoActual = 'solo';
-let catalogo = [];
+let offsetServidor = 0; // serverNow - Date.now(): para las barras de tiempo
+let espejo = false; // otra pantalla tomo el control: esta solo muestra
 let catalogoFull = [];
 let datosManos = null;
-let salaActual = null;
+let totales = { corazon: 0, fuego: 0, aplauso: 0 };
+const ahoraServidor = () => Date.now() + offsetServidor;
 
-// QR + código para sumarse a la sala desde el celu (se pide una sola vez).
-// Ojo: son pedidos al backend (Socket.IO/API), no al origen del frontend
-// -> siempre con SOCKET_URL, porque en producción viven en dominios distintos
-// (frontend en Vercel, backend en Render).
-fetch(`${SOCKET_URL}/api/qr-sala`)
-  .then((r) => r.json())
-  .then(({ dataUrl, codigo }) => {
-    if (dataUrl) $('#qrSala').src = dataUrl;
-    if (codigo) $('#salaCodigo').textContent = codigo;
-  })
-  .catch(() => {});
+// --- Datos de apoyo (siempre contra el backend, no contra el origen del front) ---
+async function cargarCatalogo() {
+  try {
+    catalogoFull = await fetch(`${SOCKET_URL}/api/canciones`).then((r) => r.json());
+  } catch {}
+  return catalogoFull;
+}
+cargarCatalogo();
 
-fetch(`${SOCKET_URL}/api/canciones`)
-  .then((r) => r.json())
-  .then((d) => (catalogoFull = d))
-  .catch(() => {});
+// EL QR de la instalacion: siempre el mismo (apunta a /sala).
+function cargarQr() {
+  fetch(`${SOCKET_URL}/api/qr`)
+    .then((r) => r.json())
+    .then(({ dataUrl, url }) => {
+      if (dataUrl) $('#qrSala').src = dataUrl;
+      if (url) $('#qrUrl').textContent = url.replace(/^https?:\/\//, '');
+    })
+    .catch(() => setTimeout(cargarQr, 3000));
+}
+cargarQr();
 
-// --- Fondo + audio + manos ------------------------------------------
-const escenario = crearEscenario($('#estrella-wrap'));
+// --- Fondo + audio + camara ------------------------------------------
+const fondo = crearFondo($('#estrella-wrap'));
 const audioBus = crearAudioBus(audio);
 const camara = crearCamara($('#camara'), video);
 const grabacion = crearGrabacion();
-let camStream = null;
 
 // canvas 1280x720 que se GRABA: camara + letra + marca de agua
 let letraRec = { texto: '', hechas: 0, titulo: '' };
@@ -67,205 +84,245 @@ const retos = crearRetos({
     if (!reto) destaparPalabra();
   },
   onResultado: ({ ok, puntos }) => {
-    if (ok) flash('¡BIEN! +' + puntos);
+    if (ok) {
+      flash('¡BIEN! +' + puntos);
+      if (!espejo) socket.emit('pantalla:retos', { puntos: retos.puntaje });
+    }
     destaparPalabra();
   },
 });
 
-// Arranca directo, sin pantalla de "tocá para empezar". Intentamos
-// desbloquear el audio apenas carga (funciona solo si el navegador corre con
-// --autoplay-policy=no-user-gesture-required, ver README "Modo kiosco").
-// Igual dejamos el intento silencioso: si en algún momento hay un click/tecla
-// real, sirve como red de seguridad.
+// Arranca directo. Intentamos desbloquear el audio apenas carga (funciona solo
+// si el navegador corre con --autoplay-policy=no-user-gesture-required, ver
+// README "Modo kiosco"); si no, aparece un chip discreto y un clic lo destraba.
 audioBus.desbloquear();
 
 function frame() {
-  escenario.latir(audioBus.tick());
-  camara.dibujar(datosManos, estadoActual);
+  fondo.latir(audioBus.tick());
+  camara.dibujar(datosManos);
   if (grabacion.grabando) recCanvas.dibujar();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 
-// --- MediaPipe + gestos + voz -----------------------------------
-const HUD_ESTADOS = ['ESPERANDO', 'MODO', 'SELECCIONANDO'];
+// --- Camara, microfono y deteccion (todo opcional: el show sigue sin ellos) ---
+let camaraOk = null; // null = todavia pidiendo permiso
+let micOk = null;
+let deteccionOk = false; // MediaPipe cargo y esta dando resultados
+let ultimaPresenciaEmit = 0;
+
 const gestos = crearGestos({
-  getEstado: () => estadoActual,
-  onGesto: enviarAccion,
   onManos: (d) => {
     datosManos = d;
-    escenario.setModo(
+    fondo.setModo(
       d?.corazon ? 'corazon' : d?.cantidadManos >= 2 ? 'dos' : d?.cantidadManos === 1 ? 'una' : ''
     );
     if (d?.corazon) flashCorazon();
-    if (estadoActual === 'MODO') pintarModo(d);
-
-    // HUD: qué está viendo la cámara
-    const hud = $('#gestoHUD');
-    if (HUD_ESTADOS.includes(estadoActual)) {
-      hud.hidden = false;
-      $('#gestoTxt').textContent = d?.gesto || 'mostrá la mano';
-    } else {
-      hud.hidden = true;
-    }
   },
 });
 
-const MS_SIN_PERSONA = 10_000;
-let ultimaPersona = performance.now();
-let ultimoResultado = 0;
-const ESTADOS_TIMEOUT = ['MODO', 'SELECCIONANDO', 'CONFIRMADA', 'COUNTDOWN', 'PLAYING'];
+async function pedirMedios() {
+  const gum = (c) => navigator.mediaDevices.getUserMedia(c);
+  const v = { width: 1280, height: 720 };
+  try {
+    return await gum({ video: v, audio: true });
+  } catch (e) {
+    // si falla uno de los dos, seguimos con el que si tengamos
+    try { return await gum({ video: v }); } catch {}
+    try { return await gum({ audio: true }); } catch {}
+    throw e;
+  }
+}
 
-navigator.mediaDevices
-  .getUserMedia({ video: { width: 1280, height: 720 }, audio: true })
+pedirMedios()
   .then((stream) => {
-    camStream = stream;
+    camaraOk = stream.getVideoTracks().length > 0;
+    micOk = stream.getAudioTracks().length > 0;
+    if (micOk) audioBus.agregarMic(stream); // la voz entra a la grabacion
+    audioBus.desbloquear(); // a veces el permiso ya cuenta como interaccion
+    if (!camaraOk) return null;
     video.srcObject = stream;
-    audioBus.agregarMic(stream); // la voz entra a la grabación
-    audioBus.desbloquear(); // otro intento: a veces el permiso de camara ya cuenta como interaccion
     return crearReconocimiento({
       video,
       numManos: 4, // cantante + copiloto, hasta 2 manos cada uno
       onResultado: ({ manos, hayPersona }) => {
-        ultimoResultado = performance.now();
+        deteccionOk = true;
         gestos({ manos });
-        if (hayPersona) ultimaPersona = performance.now();
+        const t = performance.now();
+        if (!espejo && t - ultimaPresenciaEmit > 1000) {
+          ultimaPresenciaEmit = t;
+          socket.emit('pantalla:presencia', { hay: !!hayPersona });
+        }
       },
     });
   })
   .catch((err) => {
-    console.warn('camara / MediaPipe:', err.message);
-    aviso('Cámara no disponible (' + err.name + ')');
+    console.warn('camara / microfono:', err.message);
+    if (camaraOk == null) camaraOk = false;
+    if (micOk == null) micOk = false;
   });
 
-setInterval(() => {
-  if (!ESTADOS_TIMEOUT.includes(estadoActual)) return;
-  const ahora = performance.now();
-  if (ahora - ultimoResultado > 3000) return;
-  if (ahora - ultimaPersona > MS_SIN_PERSONA) {
-    ultimaPersona = ahora;
-    console.log('[idle] 10s sin persona -> reset');
-    enviarAccion({ tipo: 'reset' });
+// Salud de la instalacion: se informa al server y se muestran chips solo si
+// algo falla (el escenario no se llena de avisos mientras todo anda).
+let saludPrevia = '';
+function salud() {
+  const audioOk = audioBus.contexto ? audioBus.contexto.state === 'running' : false;
+  const s = { camara: camaraOk !== false, mic: micOk !== false, audio: audioOk };
+  $('#chipCamara').hidden = s.camara;
+  $('#chipMic').hidden = s.mic;
+  $('#chipAudio').hidden = s.audio;
+  const k = JSON.stringify(s);
+  if (k !== saludPrevia && socket.connected && !espejo) {
+    saludPrevia = k;
+    socket.emit('pantalla:salud', s);
   }
-}, 1000);
-
-crearVoz({
-  getEstado: () => estadoActual,
-  getCatalogo: () => (catalogoFull.length ? catalogoFull : catalogo),
-  onGesto: enviarAccion,
-  onEstadoVoz: (txt) => ($('#vozStatus').textContent = txt),
+}
+setInterval(salud, 2000);
+$('#chipAudio').addEventListener('click', () => {
+  audioBus.desbloquear();
+  salud();
 });
 
-function enviarAccion({ tipo, direccion, indice, valor }) {
-  console.log('[accion] ->', tipo, direccion ?? valor ?? '');
-  socket.emit('accion', { evento: tipo, direccion, indice, valor });
-}
-socket.on('accion-rechazada', (d) => console.warn('[accion RECHAZADA]', d));
-socket.on('connect', () => console.log('[socket] conectado a', SOCKET_URL));
-socket.on('connect_error', (e) => console.warn('[socket] error:', e.message));
+// Atajo de emergencia (operador): cierra lo que haya y vuelve a un estado seguro.
+addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'r') {
+    e.preventDefault();
+    socket.emit('pantalla:reiniciar');
+    flash('REINICIO');
+  }
+});
 
-// --- Estado global ---------------------------------------------
-socket.on('estado', (snap) => {
-  const cambio = snap.nombre !== estadoPrevio;
-  estadoActual = snap.nombre;
-  modoActual = snap.modo || 'solo';
-  body.dataset.estado = snap.nombre;
+// --- Conexion ----------------------------------------------------------
+socket.on('connect', () => {
+  console.log('[socket] conectado a', SOCKET_URL);
+  $('#chipSinServer').hidden = true;
+  saludPrevia = '';
+  salud();
+});
+socket.on('disconnect', () => ($('#chipSinServer').hidden = false));
+socket.on('connect_error', (e) => {
+  console.warn('[socket] error:', e.message);
+  $('#chipSinServer').hidden = false;
+});
+socket.on('pantalla:espejo', () => {
+  espejo = true;
+  $('#chipEspejo').hidden = false;
+  detenerCancion();
+});
+
+// --- Estado global (lo manda el server) -----------------------------------
+socket.on('estado', (s) => {
+  snap = s;
+  offsetServidor = s.serverNow - Date.now();
+  const cambio = s.etapa !== etapaPrevia;
+  etapaActual = s.etapa;
+  modoActual = s.actual?.modo || 'solo';
+  body.dataset.estado = s.etapa;
   body.dataset.modo = modoActual;
+  if (s.reacciones) totales = s.reacciones;
 
-  if (snap.canciones?.length && snap.canciones.length !== catalogo.length) {
-    catalogo = snap.canciones;
-    renderCatalogo();
-  }
-
-  if (snap.sala) {
-    salaActual = snap.sala;
-    pintarSala();
-  }
-
-  switch (snap.nombre) {
-    case 'MODO':
-      $('#modoSel')?.setAttribute('data-elegido', modoActual);
-      break;
-    case 'SELECCIONANDO':
-      marcarActiva(snap.indiceCancion);
-      break;
-    case 'CONFIRMADA':
-      $('#confTitulo').textContent = snap.cancion
-        ? `${snap.cancion.titulo} · ${snap.cancion.artista}`
-        : '';
+  switch (s.etapa) {
+    case 'STANDBY':
       if (cambio) {
-        contadorReacciones = {}; // arranca de cero para este cantante
-        pintarContadorReacciones();
-        pintarQrCopiloto();
+        detenerCancion();
+        cargarTop();
       }
+      break;
+    case 'CALLING':
+      if (cambio) detenerCancion();
+      pintarCalling(s);
       break;
     case 'COUNTDOWN':
-      $('#cuenta').textContent = snap.countdown ?? 3;
+      $('#cuenta').textContent = s.actual?.cuenta ?? 3;
       break;
     case 'PLAYING':
-      if (cambio) arrancarCancion(snap.cancion);
+      if (cambio && !espejo) arrancarCancion(s.actual);
       break;
-    case 'RESULTADO':
-      if (cambio) {
-        mostrarResultado(snap);
-        $('#copilotoBadge').hidden = true;
-      }
-      break;
-    case 'ESPERANDO':
-      if (cambio) detenerCancion();
+    case 'RESULT':
+      if (cambio) mostrarResultado(s);
       break;
   }
-  pintarCantando(); // se recalcula siempre: depende del estado + de la sala
-  pintarContadorReacciones();
-  estadoPrevio = snap.nombre;
+  pintarCantando(s);
+  pintarSiguiente(s);
+  etapaPrevia = s.etapa;
 });
 
-socket.on('feedback', ({ texto }) => flash(texto));
+// la barra de tiempo del llamado (se anima sola mientras dure CALLING)
+setInterval(() => {
+  if (etapaActual !== 'CALLING' || !snap?.actual) return;
+  const { llamadoDesde, llamadoHasta } = snap.actual;
+  const resto = Math.max(0, Math.min(1, (llamadoHasta - ahoraServidor()) / (llamadoHasta - llamadoDesde)));
+  $('#turnoBarra span').style.width = (resto * 100).toFixed(1) + '%';
+}, 200);
 
-// --- Sala: fila de espera con turnos automáticos ------------------
-function pintarSala() {
-  if (!salaActual) return;
-  const { fila, llamado, cantando } = salaActual;
-
-  // ESPERANDO: si hay alguien llamado, mostramos "¡te toca!" en vez del
-  // cartel genérico; si no, queda como estaba (cualquiera puede empezar).
-  const hayLlamado = !!llamado;
-  $('#turnoLlamado').hidden = !hayLlamado;
-  $('#esperandoLibre').hidden = hayLlamado;
-  if (hayLlamado) $('#turnoNombre').textContent = llamado.nombre;
-
-  // fila visible (los que siguen después del llamado)
-  const ul = $('#filaLista');
-  ul.innerHTML = '';
-  fila.slice(0, 6).forEach((p, i) => {
-    const li = document.createElement('li');
-    li.textContent = `${i + 1}. ${p.nombre}`;
-    ul.appendChild(li);
-  });
-
-  pintarCantando();
+function pintarCalling(s) {
+  const a = s.actual;
+  if (!a) return;
+  $('#turnoNombre').textContent = a.nombre;
+  $('#turnoCancion').textContent = a.cancion
+    ? `${a.cancion.titulo} · ${a.cancion.artista}${a.modo === 'duo' ? ' · DÚO' : ''}`
+    : '';
+  $('#turnoFase').textContent =
+    a.fase === 'eligiendo' ? 'Está eligiendo su canción…' : 'Acercate al escenario y tocá LISTO en tu celu';
 }
 
-// "🎤 Nombre" arriba de la pantalla mientras esa persona tiene el escenario.
-function pintarCantando() {
+// "🎤 NOMBRE · ❤️3 🔥1" solo mientras alguien canta
+function pintarCantando(s) {
   const el = $('#cantandoAhora');
-  const nombre = salaActual?.cantando?.nombre;
-  const mostrar = nombre && ['CONFIRMADA', 'COUNTDOWN', 'PLAYING'].includes(estadoActual);
+  const mostrar = s.etapa === 'PLAYING' && s.actual?.nombre;
   el.hidden = !mostrar;
-  if (mostrar) $('#cantandoNombre').textContent = nombre;
+  if (!mostrar) return;
+  $('#cantandoNombre').textContent = s.actual.nombre;
+  pintarContador();
 }
 
-// reacciones del celu -> emojis que flotan por la pantalla + contador en vivo
-// (se reinicia con cada cantante nuevo, ver `contadorReacciones = {}` en CONFIRMADA)
-let contadorReacciones = {};
-socket.on('reaccion', ({ emoji, nombre }) => {
-  volarReaccion(emoji, nombre);
-  contadorReacciones[emoji] = (contadorReacciones[emoji] || 0) + 1;
-  pintarContadorReacciones();
+function pintarContador() {
+  const el = $('#reaccionesContador');
+  const partes = Object.entries(totales)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${EMOJI[k]}${n}`);
+  el.textContent = partes.join(' ');
+  el.hidden = !partes.length;
+}
+
+// la fila completa vive en los celulares; aca solo "SIGUE: X"
+function pintarSiguiente(s) {
+  const el = $('#siguiente');
+  const mostrar = (s.etapa === 'PLAYING' || s.etapa === 'RESULT') && s.siguiente;
+  el.hidden = !mostrar;
+  if (!mostrar) return;
+  $('#siguienteNombre').textContent = s.siguiente.nombre;
+  $('#siguienteMas').textContent = s.filaTotal > 1 ? `y ${s.filaTotal - 1} más` : '';
+}
+
+// --- STANDBY: lo mejor de la noche --------------------------------------------
+async function cargarTop() {
+  try {
+    const lista = await fetch(`${SOCKET_URL}/api/leaderboard`).then((r) => r.json());
+    const ol = $('#topNocheLista');
+    ol.innerHTML = '';
+    (lista || []).slice(0, 3).forEach((p) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<b>${escapeHtml(p.iniciales)}</b> ${p.puntaje}`;
+      ol.appendChild(li);
+    });
+    $('#topNoche').hidden = !lista?.length;
+  } catch {}
+}
+setInterval(() => {
+  if (etapaActual === 'STANDBY') cargarTop();
+}, 60_000);
+
+// --- Reacciones del publico -> emojis que flotan por el escenario ---------------
+socket.on('reaccion', ({ tipo, nombre, totales: t }) => {
+  if (t) totales = t;
+  volarReaccion(EMOJI[tipo] || '❤️', nombre);
+  if (etapaActual === 'PLAYING') pintarContador();
 });
 
 function volarReaccion(emoji, nombre) {
   const cont = $('#reacciones-vuelan');
+  if (cont.children.length > 24) return; // el escenario nunca se inunda
   const span = document.createElement('span');
   span.className = 'reaccionVolando';
   const x = 8 + Math.random() * 84; // % del ancho
@@ -278,60 +335,6 @@ function volarReaccion(emoji, nombre) {
   setTimeout(() => span.remove(), dur * 1000 + 200);
 }
 
-function pintarQrCopiloto() {
-  const badge = $('#copilotoBadge');
-  if (!badge) return;
-  fetch(`${SOCKET_URL}/api/qr-copiloto`)
-    .then((r) => r.json())
-    .then(({ dataUrl, clave }) => {
-      if (!dataUrl) { badge.hidden = true; return; }
-      $('#qrCopiloto').src = dataUrl;
-      $('#copilotoClave').textContent = clave;
-      badge.hidden = false;
-    })
-    .catch(() => { badge.hidden = true; });
-}
-
-function pintarContadorReacciones() {
-  const el = $('#reaccionesContador');
-  if (!el) return;
-  const partes = Object.entries(contadorReacciones)
-    .sort((a, b) => b[1] - a[1])
-    .map(([emoji, n]) => `${emoji}${n}`);
-  const mostrar = partes.length && ['CONFIRMADA', 'COUNTDOWN', 'PLAYING'].includes(estadoActual);
-  el.textContent = partes.join(' ');
-  el.hidden = !mostrar;
-}
-
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-// --- MODO: elegir solo / dúo ------------------------------------
-function pintarModo(d) {
-  const el = $('#modoSel');
-  if (!el) return;
-  el.dataset.hover = d?.modoElegido || '';
-  el.style.setProperty('--prog', (d?.modoProgreso || 0).toFixed(2));
-}
-
-// --- Catálogo -------------------------------------------------
-function renderCatalogo() {
-  const ul = $('#lista');
-  ul.innerHTML = '';
-  catalogo.forEach((c) => {
-    const li = document.createElement('li');
-    const duo = c.voces === 'duo' ? ' <b class="tag-duo">dúo</b>' : '';
-    li.innerHTML = `${c.titulo} <span class="art">${c.artista}</span>${duo}`;
-    ul.appendChild(li);
-  });
-}
-function marcarActiva(i) {
-  const ul = $('#lista');
-  [...ul.children].forEach((li, k) => li.classList.toggle('activa', k === i));
-  ul.children[i]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-}
-
 // --- PLAYING: audio + letra + retos --------------------------
 let letras = [];
 let voces = []; // 'p1'|'p2'|'both' por línea (modo dúo)
@@ -342,16 +345,26 @@ let fallback = true;
 let finTimer = null;
 let offsetLetra = 0;
 let duracionCancion = 40;
-let sesionActual = '';
 let mandoFin = false;
+let audioHandlers = []; // listeners de la cancion en curso (se quitan al terminar)
 const barra = $('#progreso');
 const barraFill = barra.querySelector('span');
 
-async function arrancarCancion(cancion) {
+function escucharAudio(evento, fn) {
+  audio.addEventListener(evento, fn);
+  audioHandlers.push([evento, fn]);
+}
+function soltarAudio() {
+  for (const [evento, fn] of audioHandlers) audio.removeEventListener(evento, fn);
+  audioHandlers = [];
+}
+
+async function arrancarCancion(actual) {
   const meta =
-    catalogoFull.find((c) => c.id === cancion?.id) ||
-    catalogo.find((c) => c.id === cancion?.id) ||
-    cancion;
+    catalogoFull.find((c) => c.id === actual?.cancion?.id) ||
+    (await cargarCatalogo()).find((c) => c.id === actual?.cancion?.id) ||
+    actual?.cancion;
+  soltarAudio();
   letras = [];
   voces = [];
   idxLetra = -1;
@@ -365,6 +378,7 @@ async function arrancarCancion(cancion) {
   barra.hidden = false;
   barraFill.style.width = '0%';
   retos.reset(performance.now());
+  totales = { corazon: 0, fuego: 0, aplauso: 0 };
   letraRec = { texto: '', hechas: 0, titulo: meta?.titulo || '' };
   // graba el canvas compuesto (camara + letra) + audio (cancion + voz)
   grabacion.iniciar(recCanvas.stream(30), audioBus.streamGrabacion());
@@ -380,19 +394,30 @@ async function arrancarCancion(cancion) {
 
   const dur = duracionCancion;
   if (meta?.audio) {
-    // el audio puede ser una URL absoluta (Supabase Storage, para que
-    // tambien funcione en la version online) o una ruta local del server.
-    audio.src = /^https?:\/\//.test(meta.audio) ? meta.audio : SOCKET_URL + meta.audio;
+    const abs = (u) => (/^https?:\/\//.test(u) ? u : SOCKET_URL + u);
+    let probeRemoto = false;
+    audio.src = abs(meta.audio);
     audio.currentTime = 0;
     audio.load();
     audio.play().catch(() => {});
-    audio.addEventListener('playing', () => {
+    escucharAudio('playing', () => {
+      if (!fallback) return;
       fallback = false;
       clearTimeout(finTimer);
       finTimer = setTimeout(finDeCancion, (audio.duration || dur) * 1000 + 4000);
-    }, { once: true });
-    audio.addEventListener('ended', finDeCancion, { once: true });
-    audio.addEventListener('error', () => { fallback = true; }, { once: true });
+    });
+    escucharAudio('ended', finDeCancion);
+    escucharAudio('error', () => {
+      // el audio local no esta (o fallo): probamos el de Supabase antes de resignarnos
+      if (meta.audioRemoto && !probeRemoto) {
+        probeRemoto = true;
+        audio.src = meta.audioRemoto;
+        audio.load();
+        audio.play().catch(() => {});
+      } else {
+        fallback = true;
+      }
+    });
   }
   finTimer = setTimeout(() => { if (fallback) finDeCancion(); }, dur * 1000);
 
@@ -416,27 +441,27 @@ function tickLetra() {
     mostrarLinea(nuevo);
   }
   pintarPalabras(t);
-  retos.tick(performance.now(), datosManos);
+  // los retos son de gestos: sin camara ni deteccion no tiene sentido pedirlos
+  if (camaraOk && deteccionOk) retos.tick(performance.now(), datosManos);
 }
 
+// El server calcula el puntaje (cancion + retos + publico); la pantalla solo
+// informa cuanto de la cancion se canto.
 function finDeCancion() {
   if (mandoFin) return;
   mandoFin = true;
-  // puntaje = base por completar + bonus de retos
-  const avance = Math.min(1, relojBase() / duracionCancion);
-  const base = Math.round(45 + avance * 30);
-  const valor = Math.min(100, base + retos.puntaje);
-  socket.emit('puntaje', { valor, reacciones: contadorReacciones });
+  const progreso = Math.min(1, relojBase() / duracionCancion);
+  if (!espejo) socket.emit('pantalla:fin', { progreso });
 }
 
 // Ajuste fino de sincronía en vivo: [ y ]
 addEventListener('keydown', (e) => {
-  if (estadoActual !== 'PLAYING') return;
+  if (etapaActual !== 'PLAYING') return;
   if (e.key === '[') offsetLetra -= 0.2;
   else if (e.key === ']') offsetLetra += 0.2;
   else return;
   idxLetra = -2;
-  $('#vozStatus').textContent = `offset ${offsetLetra.toFixed(1)}s`;
+  flash(`offset ${offsetLetra.toFixed(1)}s`);
   console.log('[letra] offsetLetra =', offsetLetra.toFixed(2));
 });
 
@@ -458,7 +483,7 @@ function mostrarLinea(idx, forzar = false) {
   const cur = letras[i];
   const sig = [letras[i + 1], letras[i + 2]].find((l) => l?.texto)?.texto || '';
   elSig.textContent = sig;
-  socket.emit('letra-actual', { actual: cur?.texto || '', siguiente: sig });
+  if (!espejo) socket.emit('pantalla:letra', { actual: cur?.texto || '', siguiente: sig });
 
   // color por voz (modo dúo)
   const voz = voces[i] || 'p1';
@@ -541,6 +566,7 @@ function detenerCancion() {
   clearInterval(loopId);
   loopId = null;
   clearTimeout(finTimer);
+  soltarAudio();
   mostrarLinea(-1, true);
   barra.hidden = true;
   pintarReto(null);
@@ -549,19 +575,6 @@ function detenerCancion() {
     audio.removeAttribute('src');
     audio.load();
   } catch {}
-}
-
-function pintarLeaderboard(lista) {
-  const box = $('#leaderboardBox');
-  const ul = $('#leaderboard');
-  if (!box || !ul) return;
-  ul.innerHTML = '';
-  (lista || []).forEach((p) => {
-    const li = document.createElement('li');
-    li.innerHTML = `<b>${escapeHtml(p.iniciales)}</b> ${p.puntaje}`;
-    ul.appendChild(li);
-  });
-  box.hidden = !lista?.length;
 }
 
 // --- Retos: cartel ------------------------------------------
@@ -575,78 +588,66 @@ function pintarReto(reto) {
   el.style.setProperty('--resto', (reto.resto ?? 1).toFixed(2));
 }
 
-// --- RESULTADO ---------------------------------------------
-function mostrarResultado(snap) {
+// --- RESULT ---------------------------------------------
+async function mostrarResultado(s) {
+  const r = s.actual?.resultado;
+  const token = s.privado?.videoToken;
   detenerCancion();
-  sesionActual = snap.sesionId || '';
+
+  const interrumpida = !!(r?.interrumpida || r?.forzado);
+  $('#resultadoTitulo').innerHTML = interrumpida
+    ? 'Gracias por <span class="script">cantar</span>'
+    : '¡Sos una <span class="script">popstar</span>!';
+  const msg = $('#resultadoMsg');
+  msg.hidden = !interrumpida;
+  msg.textContent = interrumpida ? (r?.motivo || 'La canción se interrumpió') : '';
+
+  // puntaje animado + desglose entendible: canción / retos / público
   const el = $('#score');
   let v = 0;
-  const meta = snap.puntaje ?? 0;
+  const meta = r?.total ?? 0;
   clearInterval(el._t);
   el._t = setInterval(() => {
     v = Math.min(meta, v + Math.max(1, Math.round(meta / 40)));
     el.textContent = v;
     if (v >= meta) clearInterval(el._t);
   }, 25);
+  const d = r?.desglose || { cancion: 0, retos: 0, publico: 0 };
+  $('#desglose').textContent = `Canción ${d.cancion} · Retos ${d.retos} · Público ${d.publico}`;
+  const re = r?.reacciones || { corazon: 0, fuego: 0, aplauso: 0 };
+  $('#resumenReacciones').textContent = `❤️ ${re.corazon}   🔥 ${re.fuego}   👏 ${re.aplauso}`;
 
-  fetch(`${SOCKET_URL}/api/leaderboard`)
-    .then((r) => r.json())
-    .then(pintarLeaderboard)
-    .catch(() => {});
+  // QR de descarga (link privado de esta performance); el cantante tambien lo
+  // recibe en su celu, el QR es solo una comodidad.
+  const qr = $('#qrMarco');
+  qr.hidden = !token;
+  if (token) {
+    fetch(`${SOCKET_URL}/api/qr-resultado?token=${encodeURIComponent(token)}`)
+      .then((x) => x.json())
+      .then(({ dataUrl }) => { if (dataUrl) $('#qrResultado').src = dataUrl; })
+      .catch(() => {});
+  }
 
-  fetch(`${SOCKET_URL}/api/qr-resultado?sesion=` + encodeURIComponent(sesionActual))
-    .then((r) => r.json())
-    .then(({ dataUrl }) => { if (dataUrl) $('#qrResultado').src = dataUrl; })
-    .catch(() => {});
-
-  // cerrar la grabación y subirla: el server la pasa a .mp4 con ffmpeg
-  const bajar = $('#bajarVideo');
-  bajar.hidden = true;
-  bajar.textContent = '⏳ preparando tu video…';
-  grabacion.detener().then(async (blob) => {
-    if (!blob || !blob.size || !sesionActual) {
-      console.warn('[video] no hay grabación para subir (blob vacío o sin sesión)');
-      bajar.hidden = false;
-      bajar.removeAttribute('href');
-      bajar.textContent = '⚠️ no se pudo grabar el video esta vez';
-      return;
-    }
-    bajar.hidden = false;
-    let subioOk = true;
+  // cerrar la grabacion y subirla: el server la pasa a .mp4 con ffmpeg
+  if (espejo) return;
+  const blob = await grabacion.detener();
+  if (!blob || !blob.size || !token) {
+    console.warn('[video] no hay grabacion para subir (blob vacio o sin token)');
+    return;
+  }
+  for (let intento = 0; intento < 3; intento++) {
     try {
-      await fetch(`${SOCKET_URL}/api/video/${sesionActual}`, {
+      const resp = await fetch(`${SOCKET_URL}/api/video/${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'video/webm' },
         body: blob,
       });
+      if (resp.ok || resp.status === 409) return;
     } catch (e) {
-      subioOk = false;
       console.warn('subida de video:', e.message);
     }
-    // esperar a que el mp4 esté listo (el server convierte en segundo plano;
-    // en Render free la conversión puede tardar bastante más que en local,
-    // asi que damos hasta 5 minutos antes de resignarnos al .webm original)
-    const mp4 = `${SOCKET_URL}/video/${sesionActual}.mp4`;
-    const INTENTOS = 150; // 150 * 2s = 5 min
-    for (let i = 0; i < INTENTOS; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
-      if (i === 30) bajar.textContent = '⏳ todavía preparando tu video, puede tardar unos minutos…';
-      try {
-        const r = await fetch(mp4);
-        if (r.ok) {
-          bajar.href = URL.createObjectURL(await r.blob());
-          bajar.download = `karaoke-${sesionActual}.mp4`;
-          bajar.textContent = '↓ descargar mi video (mp4)';
-          return;
-        }
-      } catch {}
-    }
-    bajar.href = URL.createObjectURL(blob);
-    bajar.download = `karaoke-${sesionActual}.webm`;
-    bajar.textContent = subioOk
-      ? '↓ descargar mi video (original, sin convertir)'
-      : '↓ descargar mi video (no se pudo subir, es el que quedó en tu cámara)';
-  });
+    await new Promise((x) => setTimeout(x, 2000));
+  }
 }
 
 // --- helpers UI ------------------------------------------
@@ -663,9 +664,6 @@ function flash(texto) {
   clearTimeout(el._t);
   el._t = setTimeout(() => el.classList.remove('show'), 1100);
 }
-function aviso(txt) {
-  const a = document.createElement('div');
-  a.className = 'aviso';
-  a.textContent = txt;
-  body.appendChild(a);
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }

@@ -161,50 +161,6 @@ img { max-width: 100%; }
 }
 #marca span { opacity: 0.5; }
 
-#vozBox {
-  position: fixed;
-  top: 3vmin;
-  right: 3vmin;
-  z-index: 9;
-  font-family: var(--body);
-  font-size: 0.8rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: lowercase;
-  color: var(--tinta);
-  background: var(--crema);
-  border: 2px solid var(--tinta);
-  padding: 6px 12px;
-  border-radius: 999px;
-  max-width: 42vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-#vozStatus { color: var(--rosa-hot); }
-
-/* HUD de gestos: qué está viendo la cámara (feedback en vivo) */
-#gestoHUD {
-  position: fixed;
-  bottom: 8vmin;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 9;
-  font-family: var(--body);
-  font-weight: 700;
-  text-transform: lowercase;
-  letter-spacing: 0.03em;
-  font-size: clamp(0.8rem, 2vmin, 1.1rem);
-  color: var(--crema);
-  background: var(--tinta);
-  padding: 8px 16px;
-  border-radius: 999px;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-#gestoHUD span { color: var(--rosa-hot); }
-
 #feedbackFlash {
   position: fixed;
   bottom: 20%;
@@ -242,19 +198,6 @@ img { max-width: 100%; }
 .ui[data-estado="COUNTDOWN"],
 .ui[data-estado="PLAYING"] {
   background: linear-gradient(rgba(242, 238, 229, 0.72), rgba(242, 238, 229, 0.1) 42%, transparent 62%);
-}
-.ui[data-estado="RESULTADO"] {
-  background: radial-gradient(ellipse 70% 60% at 50% 45%, rgba(242, 238, 229, 0.72), rgba(242, 238, 229, 0.2) 80%);
-}
-body[data-estado="ESPERANDO"]     .ui[data-estado="ESPERANDO"],
-body[data-estado="MODO"]          .ui[data-estado="MODO"],
-body[data-estado="SELECCIONANDO"] .ui[data-estado="SELECCIONANDO"],
-body[data-estado="CONFIRMADA"]    .ui[data-estado="CONFIRMADA"],
-body[data-estado="COUNTDOWN"]     .ui[data-estado="COUNTDOWN"],
-body[data-estado="PLAYING"]       .ui[data-estado="PLAYING"],
-body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
-  display: flex;
-  animation: subir 0.45s ease both;
 }
 @keyframes subir { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 
@@ -318,89 +261,6 @@ body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
   border-radius: 999px;
   margin-top: auto;
   margin-bottom: 2vmin;
-}
-
-/* catalogo */
-#lista {
-  list-style: none;
-  margin-top: 3vmin;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6vmin;
-  width: 100%;
-  max-width: 92vw;
-}
-#lista li {
-  font-family: var(--fat);
-  text-transform: uppercase;
-  font-size: clamp(1.4rem, 5vmin, 3.4rem);
-  line-height: 1.02;
-  letter-spacing: -0.015em;
-  color: var(--tinta);
-  opacity: 0.32;
-  transition: opacity 0.2s, transform 0.2s;
-}
-#lista li .art {
-  font-family: var(--body);
-  font-weight: 600;
-  font-size: 0.34em;
-  letter-spacing: 0.06em;
-  opacity: 0.7;
-}
-#lista li.activa {
-  opacity: 1;
-  transform: scale(1.04);
-  color: #fff;
-  background: var(--rosa);
-  padding: 0.1em 0.5em;
-  border-radius: 0.6em;
-  align-self: center;
-  rotate: -1.2deg;
-}
-.tag-duo {
-  font-family: var(--body);
-  font-weight: 800;
-  font-size: 0.3em;
-  vertical-align: middle;
-  background: var(--p2);
-  color: #fff;
-  padding: 0.15em 0.5em;
-  border-radius: 0.5em;
-  letter-spacing: 0.06em;
-}
-
-/* ---- MODO: solo / dúo ---- */
-#modoSel {
-  --prog: 0;
-  display: flex;
-  gap: 3vmin;
-  margin-top: 3vmin;
-}
-#modoSel .opc {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.4vmin;
-  padding: 3vmin 4vmin;
-  border: 3px solid var(--tinta);
-  border-radius: 1.4vmin;
-  background: var(--crema);
-  transition: transform 0.15s, background 0.15s, color 0.15s;
-}
-#modoSel .op-icono { font-size: clamp(2rem, 7vmin, 4rem); }
-#modoSel .op-txt { font-family: var(--fat); font-size: clamp(1.1rem, 3.4vmin, 2.2rem); }
-#modoSel .op-sub { font-family: var(--body); font-weight: 700; font-size: 0.8rem; letter-spacing: 0.1em; opacity: 0.6; }
-/* opción marcada por el estado del server */
-#modoSel[data-elegido="solo"] .opc[data-opc="solo"],
-#modoSel[data-elegido="duo"] .opc[data-opc="duo"] {
-  background: var(--tinta);
-  color: var(--crema);
-}
-/* la que estás "mirando" con las manos: barra de carga */
-#modoSel[data-hover="solo"] .opc[data-opc="solo"],
-#modoSel[data-hover="duo"] .opc[data-opc="duo"] {
-  transform: scale(1.06);
-  box-shadow: inset 0 calc(-1 * var(--prog) * 100%) 0 var(--rosa);
 }
 
 /* ---- reto (acciones con la mano): SIEMPRE abajo, nunca tapa la letra ---- */
@@ -517,30 +377,6 @@ body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
 #lineaSiguiente[data-voz="p1"] { color: var(--p1); opacity: 0.5; }
 #lineaSiguiente[data-voz="p2"] { color: var(--p2); opacity: 0.5; }
 
-/* resultado */
-#resultadoRow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5vmin;
-  flex-wrap: wrap;
-  margin-top: 2vmin;
-}
-#score {
-  font-family: var(--fat);
-  font-size: clamp(6rem, 34vmin, 20rem);
-  line-height: 0.82;
-  color: var(--rosa-hot);
-}
-#qrMarco {
-  border: 3px solid var(--tinta);
-  padding: 10px;
-  background: #fff;
-  rotate: -2deg;
-  box-shadow: 8px 8px 0 var(--rosa);
-}
-#qrMarco img { width: clamp(120px, 26vmin, 240px); display: block; }
-
 /* barra de progreso de la cancion */
 #progreso {
   position: fixed;
@@ -557,86 +393,6 @@ body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
   width: 0%;
   background: var(--rosa-hot);
   transition: width 0.2s linear;
-}
-
-/* boton local para bajarse el video (fallback del QR) */
-#bajarVideo {
-  pointer-events: auto;
-  font-family: var(--body);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 0.9rem;
-  color: var(--crema);
-  background: var(--tinta);
-  padding: 0.7rem 1.4rem;
-  border-radius: 999px;
-  text-decoration: none;
-  margin-top: 1vmin;
-}
-
-#leaderboardBox {
-  margin-top: 1.4vmin;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.4vmin;
-}
-#leaderboard {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.2vmin;
-  align-items: center;
-}
-#leaderboard li {
-  font-family: var(--body);
-  font-weight: 700;
-  font-size: clamp(0.75rem, 1.8vmin, 1rem);
-  color: var(--tinta);
-  opacity: 0.75;
-}
-#leaderboard li b { color: var(--rosa-hot); margin-right: 0.4em; }
-
-.aviso {
-  position: fixed;
-  bottom: 12px;
-  left: 12px;
-  z-index: 11;
-  background: var(--tinta);
-  color: var(--crema);
-  padding: 7px 12px;
-  border-radius: 8px;
-  font-size: 0.78rem;
-  font-weight: 600;
-}
-
-/* ---- Sala: código, cola y reacciones del celu ---- */
-#salaBadge {
-  position: fixed;
-  top: 3vmin;
-  left: 3vmin;
-  z-index: 9;
-  display: flex;
-  align-items: baseline;
-  gap: 0.5em;
-  font-family: var(--body);
-  color: var(--tinta);
-  background: var(--crema);
-  border: 2px solid var(--tinta);
-  padding: 6px 14px;
-  border-radius: 999px;
-}
-#salaBadge .kicker {
-  font-size: 0.62rem;
-  letter-spacing: 0.3em;
-  opacity: 0.6;
-}
-#salaCodigo {
-  font-family: var(--fat);
-  font-size: 1rem;
-  letter-spacing: 0.12em;
-  color: var(--rosa-hot);
 }
 
 #cantandoAhora {
@@ -665,71 +421,6 @@ body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
   letter-spacing: 0.02em;
 }
 #reaccionesContador::before { content: '· '; opacity: 0.6; }
-
-#copilotoBadge {
-  position: fixed;
-  top: 9.5vmin;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 9;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--crema);
-  border: 2px solid var(--tinta);
-  border-radius: 999px;
-  padding: 4px 14px 4px 4px;
-  font-family: var(--body);
-  font-weight: 700;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--tinta);
-}
-#copilotoBadge img { width: 34px; height: 34px; border-radius: 6px; }
-#copilotoBadge b { color: var(--rosa-hot); letter-spacing: 0.08em; }
-
-/* ESPERANDO: "te toca" y el cartel libre comparten el layout de .ui,
-   por eso son "contents" en vez de cajas propias */
-#turnoLlamado,
-#esperandoLibre { display: contents; }
-#turnoNombre { color: var(--rosa-hot); font-size: clamp(1.8rem, 8vmin, 4.5rem); }
-
-.tarjetaQR {
-  margin-top: 1.4vmin;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.6vmin;
-}
-.tarjetaQR img {
-  width: clamp(90px, 16vmin, 160px);
-  background: #fff;
-  border: 3px solid var(--tinta);
-  padding: 8px;
-  box-shadow: 6px 6px 0 var(--rosa);
-}
-
-#filaLista {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.5em;
-  margin-top: 0.6vmin;
-  list-style: none;
-  max-width: 80vmin;
-}
-#filaLista li {
-  font-family: var(--body);
-  font-weight: 700;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  background: var(--crema);
-  border: 2px solid var(--tinta);
-  padding: 4px 12px;
-  border-radius: 999px;
-}
 
 /* emojis que mandan desde el celu y flotan por la pantalla */
 #reacciones-vuelan {
@@ -773,13 +464,165 @@ body[data-estado="RESULTADO"]     .ui[data-estado="RESULTADO"] {
   }
 }
 
-/* Pantalla apaisada (proyector): tipo mas compacto, lista mas chica */
+/* ============ Una sola sala: estados del escenario ============ */
+/* chips de salud: solo aparecen si algo falla */
+#chips {
+  position: fixed;
+  left: 3vmin;
+  bottom: 3vmin;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 70vw;
+}
+.chip {
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: 0.78rem;
+  color: var(--crema);
+  background: var(--tinta);
+  border: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+}
+button.chip { cursor: pointer; pointer-events: auto; }
+
+/* visibilidad de cada etapa */
+body[data-estado="STANDBY"]   .ui[data-estado="STANDBY"],
+body[data-estado="CALLING"]   .ui[data-estado="CALLING"],
+body[data-estado="COUNTDOWN"] .ui[data-estado="COUNTDOWN"],
+body[data-estado="PLAYING"]   .ui[data-estado="PLAYING"],
+body[data-estado="RESULT"]    .ui[data-estado="RESULT"] {
+  display: flex;
+  animation: subir 0.45s ease both;
+}
+.ui[data-estado="RESULT"] {
+  background: radial-gradient(ellipse 70% 60% at 50% 45%, rgba(242, 238, 229, 0.78), rgba(242, 238, 229, 0.2) 80%);
+}
+.ui[data-estado="CALLING"] { justify-content: center; }
+.ui[data-estado="STANDBY"] { justify-content: center; }
+
+/* STANDBY: bienvenida + QR grande */
+.tarjetaQR {
+  margin-top: 2vmin;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.8vmin;
+}
+.tarjetaQR img {
+  width: clamp(150px, 26vmin, 300px);
+  background: #fff;
+  border: 3px solid var(--tinta);
+  padding: 10px;
+  box-shadow: 8px 8px 0 var(--rosa);
+}
+.qrTitulo {
+  font-family: var(--fat);
+  text-transform: uppercase;
+  font-size: clamp(1rem, 3vmin, 1.8rem);
+  margin-top: 1vmin;
+}
+#topNoche { margin-top: 2vmin; }
+#topNocheLista {
+  list-style: none;
+  display: flex;
+  gap: 1.2rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+#topNocheLista li {
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: clamp(0.8rem, 2vmin, 1.1rem);
+  opacity: 0.8;
+}
+#topNocheLista li b { color: var(--rosa-hot); margin-right: 0.4em; }
+
+/* CALLING: turno de X */
+#turnoNombre { color: var(--rosa-hot); font-size: clamp(2.4rem, 12vmin, 8rem); }
+#turnoBarra {
+  width: min(60vw, 520px);
+  height: 8px;
+  margin-top: 2vmin;
+  background: color-mix(in srgb, var(--tinta) 14%, transparent);
+  border-radius: 99px;
+  overflow: hidden;
+}
+#turnoBarra span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--rosa-hot);
+  transition: width 0.2s linear;
+}
+
+/* PLAYING: abajo, "SIGUE: X" chiquito */
+#siguiente {
+  position: fixed;
+  right: 3vmin;
+  bottom: 4vmin;
+  z-index: 9;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  font-family: var(--body);
+  color: var(--tinta);
+  background: var(--crema);
+  border: 2px solid var(--tinta);
+  border-radius: 999px;
+  padding: 6px 16px;
+}
+#siguiente .kicker { font-size: 0.62rem; letter-spacing: 0.3em; opacity: 0.6; }
+#siguiente b { font-family: var(--fat); text-transform: uppercase; font-size: clamp(0.9rem, 2.2vmin, 1.3rem); color: var(--rosa-hot); }
+#siguiente small { font-weight: 600; opacity: 0.6; font-size: 0.75rem; }
+
+/* RESULT */
+#resultadoRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5vmin;
+  flex-wrap: wrap;
+  margin-top: 2vmin;
+}
+#scoreBox { display: flex; flex-direction: column; align-items: center; gap: 0.6vmin; }
+#score {
+  font-family: var(--fat);
+  font-size: clamp(6rem, 34vmin, 20rem);
+  line-height: 0.82;
+  color: var(--rosa-hot);
+}
+#desglose, #resumenReacciones {
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: clamp(0.85rem, 2.4vmin, 1.4rem);
+  letter-spacing: 0.02em;
+}
+#resumenReacciones { font-size: clamp(1.1rem, 3.4vmin, 2rem); }
+#qrMarco {
+  border: 3px solid var(--tinta);
+  padding: 10px;
+  background: #fff;
+  rotate: -2deg;
+  box-shadow: 8px 8px 0 var(--rosa);
+  text-align: center;
+}
+#qrMarco img { width: clamp(120px, 22vmin, 220px); display: block; }
+#qrMarco .hint { color: var(--tinta); margin-top: 6px; font-size: 0.75rem; }
+
+/* Pantalla apaisada (proyector): tipo mas compacto */
 @media (min-aspect-ratio: 1/1) {
   .cartel { font-size: clamp(2.2rem, 10vh, 6rem); }
-  #lista li { font-size: clamp(1.1rem, 4.4vh, 2.4rem); }
   .ui { padding-top: 5vmin; gap: 1vmin; }
   #cuenta { font-size: 62vh; }
   #score { font-size: clamp(4rem, 30vh, 14rem); }
   #lineaActual { font-size: clamp(1.6rem, var(--fitActual, 6vh), 5rem); }
   #resultadoRow { flex-wrap: nowrap; }
 }
+
+/* CALLING: todo centrado (el .hint por defecto se pega abajo) */
+#turnoFase { margin-top: 1vmin; }
+#turnoCancion:empty { display: none; }

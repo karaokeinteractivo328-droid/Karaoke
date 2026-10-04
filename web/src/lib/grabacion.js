@@ -37,13 +37,16 @@ export function crearGrabacion() {
 
   function detener() {
     return new Promise((resolve) => {
-      if (!rec || rec.state === 'inactive') return resolve(blob);
+      // sin grabacion en curso no hay nada que entregar (y jamas devolvemos el
+      // blob de la performance anterior para subirlo con el token de otra)
+      if (!rec || rec.state === 'inactive') return resolve(null);
       rec.onstop = () => {
         blob = new Blob(chunks, { type: chunks[0]?.type || 'video/webm' });
         rec = null;
         resolve(blob);
+        blob = null;
       };
-      try { rec.stop(); } catch { resolve(blob); }
+      try { rec.stop(); } catch { rec = null; resolve(null); }
     });
   }
 
