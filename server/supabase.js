@@ -21,10 +21,14 @@ export function iniciales(nombre) {
   return (limpio.slice(0, 3) || 'VOS').padEnd(3, '·');
 }
 
-export async function guardarPuntaje({ sesionId, nombre, puntaje, cancion, reacciones }) {
-  if (!supabase) return;
-  try {
-    await supabase.from('puntajes').insert({
+// Si no hay Internet (o Supabase falla), no se pierde el puntaje: queda en un
+// buffer en memoria y se reintenta cada minuto (hasta 50 pendientes).
+const pendientes = [];
+
+async function intentarGuardar(datos) {
+  const { sesionId, nombre, puntaje, cancion, reacciones } = datos;
+  if (!datos.puntajeGuardado) {
+    const p = await supabase.from('puntajes').insert({
       sesion_id: sesionId,
       nombre: nombre || null,
       iniciales: iniciales(nombre),
@@ -32,19 +36,43 @@ export async function guardarPuntaje({ sesionId, nombre, puntaje, cancion, reacc
       cancion_titulo: cancion?.titulo ?? null,
       cancion_artista: cancion?.artista ?? null,
     });
-    if (reacciones && Object.keys(reacciones).length) {
-      await supabase.from('reacciones_resumen').insert({
-        sesion_id: sesionId,
-        corazon: (reacciones['❤️'] || 0),
-        fuego: (reacciones['🔥'] || 0),
-        aplausos: (reacciones['👏'] || 0),
-        risa: (reacciones['😂'] || 0),
-        estrella: (reacciones['⭐'] || 0),
-      });
-    }
-  } catch (e) {
-    console.warn('[supabase] error guardando puntaje/reacciones:', e.message);
+    if (p.error) throw new Error(p.error.message);
+    datos.puntajeGuardado = true; // si falla lo de abajo, el reintento no duplica la fila
   }
+  if (reacciones && Object.keys(reacciones).length) {
+    const r = await supabase.from('reacciones_resumen').insert({
+      sesion_id: sesionId,
+      corazon: reacciones['❤️'] || 0,
+      fuego: reacciones['🔥'] || 0,
+      aplausos: reacciones['👏'] || 0,
+      risa: reacciones['😂'] || 0,
+      estrella: reacciones['⭐'] || 0,
+    });
+    if (r.error) throw new Error(r.error.message);
+  }
+}
+
+export async function guardarPuntaje(datos) {
+  if (!supabase) return;
+  try {
+    await intentarGuardar(datos);
+  } catch (e) {
+    console.warn('[supabase] no se pudo guardar, queda pendiente:', e.message);
+    if (pendientes.length < 50) pendientes.push(datos);
+  }
+}
+
+if (supabase) {
+  setInterval(async () => {
+    const lote = pendientes.splice(0, pendientes.length);
+    for (const d of lote) {
+      try {
+        await intentarGuardar(d);
+      } catch {
+        pendientes.push(d);
+      }
+    }
+  }, 60_000).unref();
 }
 
 export async function obtenerLeaderboard(limite = 10) {
