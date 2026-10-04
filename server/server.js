@@ -359,7 +359,13 @@ io.on('connection', (socket) => {
   });
 
   // todo intent de celu pasa por aca: sin token no hay nada que hacer
+  // (y un tope por socket: un celu roto o malicioso no puede inundar al server)
+  let ventana = 0;
+  let enVentana = 0;
   const intent = (cb, fn) => {
+    const ahora = Date.now();
+    if (ahora - ventana > 1000) { ventana = ahora; enVentana = 0; }
+    if (++enVentana > 30) return cb?.({ ok: false, error: 'Muy rápido, esperá un segundo' });
     const token = tokenPorSocket.get(socket.id);
     if (!token) return cb?.({ ok: false, error: 'Sin sesión: recargá la página' });
     cb?.(fn(token));
