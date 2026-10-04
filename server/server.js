@@ -78,10 +78,12 @@ let pantallaPrimaria = null; // socket.id de la pantalla grande "de verdad"
 let pantallaPid = ''; // id de carga de pagina de esa pantalla (distingue reconexion de recarga)
 const tokenPorSocket = new Map(); // socket.id -> token del participante
 const socketsPorToken = new Map(); // token -> Set(socket.id) (puede tener 2 pestañas)
+let ultimaLetra = null; // para que un celu que entra a mitad de cancion vea la linea actual
 const videoTokens = new Map(); // videoToken -> cuando se creo (habilita la subida)
 
 function emitirTodo() {
   const snap = escenario.snapshot();
+  if (snap.etapa !== 'PLAYING') ultimaLetra = null;
   for (const [id, socket] of io.sockets.sockets) {
     if (id === pantallaPrimaria) socket.emit('estado', { ...snap, privado: escenario.privadoPantalla() });
     else socket.emit('estado', snap);
@@ -352,6 +354,7 @@ io.on('connection', (socket) => {
     if (!socketsPorToken.has(token)) socketsPorToken.set(token, new Set());
     socketsPorToken.get(token).add(socket.id);
     socket.emit('yo', escenario.yo(token));
+    if (ultimaLetra) socket.emit('letra', ultimaLetra);
     cb?.({ ok: true, yo: escenario.yo(token) });
   });
 
@@ -390,7 +393,8 @@ io.on('connection', (socket) => {
   socket.on('pantalla:reiniciar', soloPantalla(() => escenario.reinicioSeguro()));
   // la linea de letra actual, para el teleprompter del copiloto
   socket.on('pantalla:letra', soloPantalla(({ actual, siguiente } = {}) => {
-    io.emit('letra', { actual: String(actual || '').slice(0, 200), siguiente: String(siguiente || '').slice(0, 200) });
+    ultimaLetra = { actual: String(actual || '').slice(0, 200), siguiente: String(siguiente || '').slice(0, 200) };
+    io.emit('letra', ultimaLetra);
   }));
 
   socket.on('disconnect', () => {
