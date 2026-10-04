@@ -39,7 +39,7 @@ export function crearCamara(canvas, video) {
     return [g.ox + nx * g.dw, g.oy + ny * g.dh];
   }
 
-  function dibujar(datos, estado) {
+  function dibujar(datos, seleccion = false) {
     ctx.clearRect(0, 0, W, H);
     if (!video.videoWidth) return;
     const g = geo();
@@ -51,10 +51,10 @@ export function crearCamara(canvas, video) {
     ctx.drawImage(video, g.ox, g.oy, g.dw, g.dh);
     ctx.restore();
 
-    // --- guías de zona en SELECCIONANDO ---
-    if (estado === 'SELECCIONANDO') {
-      const yTop = aPantalla(0, 0.38, g)[1];
-      const yBot = aPantalla(0, 0.62, g)[1];
+    // --- guías de zona mientras se elige la canción con la mano ---
+    if (seleccion) {
+      const yTop = aPantalla(0, 0.45, g)[1];
+      const yBot = aPantalla(0, 0.55, g)[1];
       banda(0, yTop, datos?.zonaScroll === 'arriba', '↑');
       banda(yBot, H, datos?.zonaScroll === 'abajo', '↓');
     }
@@ -104,7 +104,7 @@ export function crearCamara(canvas, video) {
   }
 
   function banda(y0, y1, activa, flecha) {
-    ctx.fillStyle = activa ? 'rgba(236,47,128,0.28)' : 'rgba(22,21,19,0.14)';
+    ctx.fillStyle = activa ? 'rgba(236,47,128,0.28)' : 'rgba(22,21,19,0.12)';
     ctx.fillRect(0, y0, W, y1 - y0);
     ctx.fillStyle = activa ? '#fff' : 'rgba(255,255,255,0.6)';
     ctx.font = `900 ${Math.min(W, H) * 0.05}px "Archivo Black", sans-serif`;

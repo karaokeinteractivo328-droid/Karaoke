@@ -11,8 +11,8 @@ const URL =
     ? `http://${location.hostname}:3000`
     : location.origin);
 
-export function conectar(rol) {
-  return io(URL, { query: { rol }, transports: ['websocket', 'polling'] });
+export function conectar(rol, extra = {}) {
+  return io(URL, { query: { rol, ...extra }, transports: ['websocket', 'polling'] });
 }
 
 export const SOCKET_URL = URL;

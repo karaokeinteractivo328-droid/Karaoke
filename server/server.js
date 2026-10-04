@@ -1,14 +1,12 @@
-// El cerebro del karaoke interactivo.
-// - Coordina la maquina de estados y la reparte por Socket.IO
-// - Expone el catalogo de canciones y los archivos de audio/letra
-// - En produccion (npm start) tambien sirve el frontend Astro compilado
+// El cerebro del karaoke interactivo: UNA sala, UN QR, UNA fila.
 //
-// Arquitectura:
-//   [Pantalla principal]  --acciones (manos + voz)-->  [este servidor]
-//   [Sensor ultrasonico Arduino] --WebSocket/Serial-->      (maquina de estados)
-//
-// Ya NO hay control por celular: todo se maneja desde la camara de la pantalla
-// principal (MediaPipe Hands + reconocimiento de voz).
+// - server/escenario.js lleva toda la logica (escenario + participantes + fila).
+//   Este archivo solo la conecta con el mundo: Socket.IO, HTTP, video, Supabase.
+// - Cada celu se identifica con un token (lo guarda en localStorage), asi puede
+//   recargar o perder conexion y retomar. Los intents de los celus se autorizan
+//   siempre por ese token; la pantalla grande es "primaria" (la ultima que se
+//   conecta) y es la unica que puede reportar fin de cancion, letra y salud.
+// - En produccion (npm start) tambien sirve el frontend Astro compilado.
 //
 // En dev el frontend corre aparte con `astro dev` (:4321) y se conecta a este
 // socket por su URL absoluta; por eso habilitamos CORS.
@@ -26,8 +24,7 @@ import os from 'node:os';
 import QRCode from 'qrcode';
 import ffmpegPath from 'ffmpeg-static';
 
-import { crearMaquina, ESTADOS } from './stateMachine.js';
-import { crearSala } from './sala.js';
+import { crearEscenario } from './escenario.js';
 import { guardarPuntaje, obtenerLeaderboard } from './supabase.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -37,49 +34,99 @@ const DIST = join(__dirname, '..', 'web', 'dist');
 // Servir el frontend compilado solo cuando se pide explicitamente (npm start).
 const SERVIR_BUILD = process.env.SERVE_BUILD === '1' && existsSync(DIST);
 
+// URLs publicas cuando esta deployado (frontend en Vercel, backend en Render):
+// si estan seteadas las usamos tal cual; si no, asumimos el modo kiosco local
+// (todo en la misma red wifi, direccionado por IP).
+const FRONTEND_PUBLICO = process.env.PUBLIC_FRONTEND_URL?.replace(/\/$/, '');
+const BACKEND_PUBLICO = process.env.PUBLIC_BACKEND_URL?.replace(/\/$/, '');
+
 const app = express();
 app.use(cors());
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: '*' } });
 
+// Un error suelto nunca debe dejar la instalacion fisica muerta.
+process.on('uncaughtException', (e) => console.error('[uncaughtException]', e));
+process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e));
+
 // --- Catalogo de canciones ---------------------------------------------
+// Si el audio esta en disco (modo kiosco, sin depender de Internet) se sirve
+// local; si no (Render), cae a la URL de Supabase Storage de canciones.json.
 async function cargarCanciones() {
   try {
     const raw = await readFile(join(__dirname, 'canciones', 'canciones.json'), 'utf8');
-    return JSON.parse(raw);
+    const lista = JSON.parse(raw);
+    for (const c of lista) {
+      const remoto = /^https?:\/\//.test(c.audio || '') ? c.audio : null;
+      const local = remoto ? `/canciones/${c.id}/${c.id}.m4a` : c.audio;
+      if (local && existsSync(join(__dirname, local))) {
+        c.audioRemoto = remoto;
+        c.audio = local;
+      }
+    }
+    return lista;
   } catch (err) {
     console.warn('[canciones] no pude leer canciones.json:', err.message);
     return [];
   }
 }
 
-let canciones = await cargarCanciones();
+const canciones = await cargarCanciones();
 
-// --- Maquina de estados + sala (fila de espera y reacciones) -----------
-// Se emiten juntas: todo cliente (pantalla o celu) recibe {..maquina, sala}.
+// --- Sockets y sesiones --------------------------------------------------
+let pantallaPrimaria = null; // socket.id de la pantalla grande "de verdad"
+let pantallaPid = ''; // id de carga de pagina de esa pantalla (distingue reconexion de recarga)
+const tokenPorSocket = new Map(); // socket.id -> token del participante
+const socketsPorToken = new Map(); // token -> Set(socket.id) (puede tener 2 pestañas)
+let ultimaLetra = null; // para que un celu que entra a mitad de cancion vea la linea actual
+const videoTokens = new Map(); // videoToken -> cuando se creo (habilita la subida)
+
 function emitirTodo() {
-  io.emit('estado', { ...maquina.snapshot(), sala: sala.snapshot() });
+  const snap = escenario.snapshot();
+  if (snap.etapa !== 'PLAYING') ultimaLetra = null;
+  for (const [id, socket] of io.sockets.sockets) {
+    if (id === pantallaPrimaria) socket.emit('estado', { ...snap, privado: escenario.privadoPantalla() });
+    else socket.emit('estado', snap);
+    const token = tokenPorSocket.get(id);
+    if (token) socket.emit('yo', escenario.yo(token));
+  }
 }
 
-let nombrePrevio = ESTADOS.ESPERANDO;
-// si quien confirmo turno ya habia elegido cancion desde el celu mientras
-// esperaba, se aplica apenas la maquina entre a SELECCIONANDO (ver 'accion').
-let preseleccionPendiente = null;
-const maquina = crearMaquina({
+const reaccionesAEmoji = (r = {}) => ({
+  '❤️': r.corazon || 0,
+  '🔥': r.fuego || 0,
+  '👏': r.aplauso || 0,
+});
+
+const escenario = crearEscenario({
   canciones,
-  onCambio: (snap) => {
-    // al terminar una cancion (o resetear a mitad de camino) se libera el
-    // lugar del cantante y se llama automaticamente al siguiente de la fila.
-    if (snap.nombre !== nombrePrevio) {
-      if (snap.nombre === ESTADOS.RESULTADO || snap.nombre === ESTADOS.ESPERANDO) sala.liberar();
-      nombrePrevio = snap.nombre;
-    }
-    emitirTodo();
+  // ESCENARIO_CONFIG='{"RESULT_MS":3000}' permite achicar tiempos (tests, demos)
+  config: JSON.parse(process.env.ESCENARIO_CONFIG || '{}'),
+  log: (m) => console.log(m),
+  onCambio: emitirTodo,
+  onRonda: ({ videoToken }) => videoTokens.set(videoToken, Date.now()),
+  onResultado: ({ rondaId, nombre, cancion, resultado }) => {
+    guardarPuntaje({
+      sesionId: rondaId,
+      nombre,
+      puntaje: resultado.total,
+      cancion,
+      reacciones: reaccionesAEmoji(resultado.reacciones),
+    });
   },
 });
-const sala = crearSala({ onCambio: emitirTodo });
 
-// --- API -----------------------------------------------------------
+// El watchdog: una vez por segundo hace avanzar timeouts, gracias de
+// reconexion, countdown y abandonos. Es lo que hace que nunca se trabe.
+setInterval(() => {
+  try {
+    escenario.tick();
+  } catch (e) {
+    console.error('[watchdog] error en tick:', e);
+  }
+}, 1000);
+
+// --- API -----------------------------------------------------------------
 app.get('/api/canciones', (_req, res) => res.json(canciones));
 app.use('/canciones', express.static(join(__dirname, 'canciones')));
 
@@ -87,12 +134,21 @@ app.get('/api/leaderboard', async (_req, res) => {
   res.json(await obtenerLeaderboard(10));
 });
 
+// Para un monitor de uptime (Render free se duerme sin trafico) y para ver
+// de un vistazo si el escenario esta vivo.
+app.get('/healthz', (_req, res) => {
+  const s = escenario.snapshot();
+  res.json({ ok: true, etapa: s.etapa, fila: s.filaTotal, pantalla: s.pantalla, uptime: Math.round(process.uptime()) });
+});
+
 // --- Grabaciones: la pantalla sube el .webm, el server lo pasa a .mp4 con
-//     ffmpeg, y el celular lo baja por QR ---
+//     ffmpeg, y el celular lo baja con un link privado (token imposible de
+//     adivinar, asociado a esa performance) ---
 const GRAB = join(__dirname, 'grabaciones');
 await mkdir(GRAB, { recursive: true });
 const idOk = (s) => /^[A-Za-z0-9]{4,40}$/.test(s || '');
 const enProceso = new Set();
+const RETENCION_VIDEO_MS = 6 * 60 * 60 * 1000; // el video se borra a las 6 h
 
 // Si el server se reinicia (o se cuelga) a mitad de una conversion, puede
 // quedar un *.tmp.mp4 huerfano de una vez anterior: nunca es valido, lo
@@ -100,6 +156,19 @@ const enProceso = new Set();
 for (const f of await readdir(GRAB).catch(() => [])) {
   if (f.endsWith('.tmp.mp4')) await rm(join(GRAB, f), { force: true }).catch(() => {});
 }
+
+// Privacidad + disco: los videos viejos se borran solos (una instalacion
+// fisica que corre horas no puede llenarse de grabaciones).
+setInterval(async () => {
+  const limite = Date.now() - RETENCION_VIDEO_MS;
+  for (const [t, creado] of videoTokens) if (creado < limite) videoTokens.delete(t);
+  for (const f of await readdir(GRAB).catch(() => [])) {
+    try {
+      const st = await stat(join(GRAB, f));
+      if (st.mtimeMs < limite) await rm(join(GRAB, f), { force: true });
+    } catch {}
+  }
+}, 10 * 60 * 1000).unref();
 
 // Convierte a un archivo TEMPORAL y recien al final lo renombra al .mp4
 // definitivo. Asi, si ffmpeg se cuelga, lo matamos, o el server se reinicia
@@ -166,19 +235,26 @@ function validarMp4(path) {
   });
 }
 
+// Solo se acepta la subida del token de una performance real (lo emite el
+// escenario al empezar el countdown), una sola vez, con tope de tamaño.
 app.post(
-  '/api/video/:sesion',
-  express.raw({ type: ['video/webm', 'application/octet-stream'], limit: '400mb' }),
+  '/api/video/:token',
+  express.raw({ type: ['video/webm', 'application/octet-stream'], limit: '150mb' }),
   async (req, res) => {
-    if (!idOk(req.params.sesion) || !req.body?.length) return res.sendStatus(400);
-    await writeFile(join(GRAB, `${req.params.sesion}.webm`), req.body);
-    console.log(`[video] recibido ${req.params.sesion}.webm (${(req.body.length / 1e6).toFixed(1)} MB) -> convirtiendo`);
+    const token = req.params.token;
+    if (!idOk(token) || !videoTokens.has(token)) return res.sendStatus(403);
+    if (!req.body?.length) return res.sendStatus(400);
+    if (enProceso.has(token) || existsSync(join(GRAB, `${token}.webm`)) || existsSync(join(GRAB, `${token}.mp4`))) {
+      return res.sendStatus(409);
+    }
+    await writeFile(join(GRAB, `${token}.webm`), req.body);
+    console.log(`[video] recibido ${token}.webm (${(req.body.length / 1e6).toFixed(1)} MB) -> convirtiendo`);
     res.json({ ok: true });
-    aMp4(req.params.sesion);
+    aMp4(token);
   }
 );
 
-// `/video/<id>.mp4` / `.webm` = archivo ; `/video/<id>` = pagina.
+// `/video/<token>.mp4` / `.webm` = archivo ; `/video/<token>` = pagina.
 app.get('/video/:archivo', (req, res) => {
   const a = req.params.archivo;
   for (const ext of ['.mp4', '.webm']) {
@@ -191,35 +267,34 @@ app.get('/video/:archivo', (req, res) => {
   }
   if (!idOk(a)) return res.sendStatus(404);
   const listo = existsSync(join(GRAB, `${a}.mp4`));
-  const subiendo = !listo && !existsSync(join(GRAB, `${a}.webm`)) && !enProceso.has(a);
-  res.type('html').send(`<!doctype html><html lang="es"><head><meta charset="utf-8">
+  const hayWebm = existsSync(join(GRAB, `${a}.webm`));
+  const conocido = listo || hayWebm || enProceso.has(a) || videoTokens.has(a);
+  const subiendo = !listo && !hayWebm && !enProceso.has(a);
+  const pagina = (cuerpo) => `<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Tu video · Karaoke</title>
 <style>body{margin:0;background:#0a0716;color:#f2eee5;font-family:system-ui,sans-serif;text-align:center;padding:24px}
 h1{font-weight:800}video{width:100%;max-width:520px;border-radius:14px;background:#000}
 a.btn{display:inline-block;margin-top:16px;background:#ec2f80;color:#fff;font-weight:700;text-decoration:none;padding:14px 22px;border-radius:999px}
-p{opacity:.75}</style></head><body>
-<h1>¡Sos una estrella! ⭐</h1>
+p{opacity:.75}</style></head><body>${cuerpo}</body></html>`;
+  if (!conocido) {
+    return res.status(404).type('html').send(pagina('<h1>Este video ya no está</h1><p>Los videos se borran a las 6 horas, o el link no es correcto.</p>'));
+  }
+  res.type('html').send(
+    pagina(`<h1>¡Sos una estrella! ⭐</h1>
 ${listo
   ? `<video src="/video/${a}.mp4" controls playsinline></video><br>
      <a class="btn" href="/video/${a}.mp4" download="karaoke-${a}.mp4">↓ Descargar (mp4)</a>`
   : subiendo
     ? `<p>Todavía no llegó tu video. Recargá en unos segundos.</p><script>setTimeout(()=>location.reload(),4000)</script>`
-    : `<p>Procesando tu video… puede tardar unos minutos, no cierres esta página.</p><script>setTimeout(()=>location.reload(),6000)</script>`}
-</body></html>`);
+    : `<p>Procesando tu video… puede tardar unos minutos, no cierres esta página.</p><script>setTimeout(()=>location.reload(),6000)</script>`}`)
+  );
 });
 
-// URLs publicas cuando esta deployado (frontend en Vercel, backend en Render):
-// si estan seteadas las usamos tal cual; si no, asumimos el modo kiosco local
-// del evento (todo en la misma red wifi, direccionado por IP).
-const FRONTEND_PUBLICO = process.env.PUBLIC_FRONTEND_URL?.replace(/\/$/, '');
-const BACKEND_PUBLICO = process.env.PUBLIC_BACKEND_URL?.replace(/\/$/, '');
-
-// QR de la pantalla de RESULTADO -> pagina de descarga del video (la sirve
-// este mismo backend).
+// QR de descarga del video de una performance (link privado con su token).
 app.get('/api/qr-resultado', async (req, res) => {
-  const sesion = req.query.sesion || '';
+  const token = req.query.token || req.query.sesion || '';
   const base = BACKEND_PUBLICO || `http://${ipLocal()}:${PORT}`;
-  const url = `${base}/video/${sesion}`;
+  const url = `${base}/video/${token}`;
   try {
     const dataUrl = await QRCode.toDataURL(url, { margin: 1, width: 320 });
     res.json({ url, dataUrl });
@@ -228,31 +303,18 @@ app.get('/api/qr-resultado', async (req, res) => {
   }
 });
 
-// QR para anotarse a la sala desde el celu -> /sala?codigo=XXXX (pagina del
-// frontend: en dev vive en el puerto de astro, en produccion en Vercel).
-app.get('/api/qr-sala', async (_req, res) => {
+// EL QR de la instalacion: siempre el mismo (apunta a /sala, sin codigos), asi
+// se puede imprimir y pegar en la pared sin que cambie entre reinicios.
+let qrCache = null;
+app.get('/api/qr', async (_req, res) => {
   const frontPort = SERVIR_BUILD ? PORT : WEB_PORT;
   const base = FRONTEND_PUBLICO || `http://${ipLocal()}:${frontPort}`;
-  const url = `${base}/sala?codigo=${sala.codigo}`;
+  const url = `${base}/sala`;
   try {
-    const dataUrl = await QRCode.toDataURL(url, { margin: 1, width: 320 });
-    res.json({ url, dataUrl, codigo: sala.codigo });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// QR para el "copiloto" de la ronda actual -> /sala?codigo=X&rol=copiloto&clave=Y.
-// Solo tiene sentido mientras alguien esta cantando (la clave es por ronda).
-app.get('/api/qr-copiloto', async (_req, res) => {
-  const { cantando, claveCopiloto } = sala.snapshot();
-  if (!cantando || !claveCopiloto) return res.json({ url: null, dataUrl: null });
-  const frontPort = SERVIR_BUILD ? PORT : WEB_PORT;
-  const base = FRONTEND_PUBLICO || `http://${ipLocal()}:${frontPort}`;
-  const url = `${base}/sala?codigo=${sala.codigo}&rol=copiloto&clave=${claveCopiloto}`;
-  try {
-    const dataUrl = await QRCode.toDataURL(url, { margin: 1, width: 320 });
-    res.json({ url, dataUrl, clave: claveCopiloto });
+    if (!qrCache || qrCache.url !== url) {
+      qrCache = { url, dataUrl: await QRCode.toDataURL(url, { margin: 1, width: 480 }) };
+    }
+    res.json(qrCache);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -266,111 +328,110 @@ if (SERVIR_BUILD) {
 
 // --- Socket.IO ----------------------------------------------------
 io.on('connection', (socket) => {
-  const rol = socket.handshake.query.rol || 'desconocido';
+  const rol = socket.handshake.query.rol || 'celu';
   console.log(`[socket] conexion (${rol}) ${socket.id}`);
 
-  // La pantalla es EL show: si (re)carga, siempre volvemos al inicio.
-  // Nunca debe abrir en el medio de una cancion.
-  if (rol === 'pantalla' && maquina.nombre !== ESTADOS.ESPERANDO) {
-    maquina.enviar('reset');
+  // Pantalla grande: la ultima que se conecta es la primaria; las anteriores
+  // quedan como espejo (solo muestran, no pueden mandar fin/letra/salud).
+  if (rol === 'pantalla') {
+    const anterior = pantallaPrimaria && io.sockets.sockets.get(pantallaPrimaria);
+    const pid = String(socket.handshake.query.pid || '');
+    // misma pagina que volvio de un corte de red (socket nuevo, mismo pid)
+    const reconexion = !!pid && pid === pantallaPid;
+    pantallaPrimaria = socket.id;
+    pantallaPid = pid;
+    if (anterior && anterior.id !== socket.id) anterior.emit('pantalla:espejo');
+    escenario.pantallaConectada({ reconexion });
   }
+  socket.emit('estado', socket.id === pantallaPrimaria ? { ...escenario.snapshot(), privado: escenario.privadoPantalla() } : escenario.snapshot());
 
-  socket.emit('estado', { ...maquina.snapshot(), sala: sala.snapshot() });
-
-  // La pantalla (gestos + voz) y el sensor mandan acciones aca.
-  socket.on('accion', ({ evento, ...payload } = {}) => {
-    if (!evento) return;
-    console.log(`[accion] ${rol} -> ${evento}`, payload);
-    // si estaba llamado alguien de la fila, levantar la mano lo confirma
-    // como el cantante de esta ronda (queda "cantando" para mostrar su nombre).
-    if (evento === 'presencia' && maquina.nombre === ESTADOS.ESPERANDO) {
-      const cantando = sala.confirmarTurno();
-      preseleccionPendiente = Number.isInteger(cantando?.preseleccion) ? cantando.preseleccion : null;
-    }
-    const ok = maquina.enviar(evento, payload);
-    // si ya habia elegido cancion desde el celu mientras esperaba en la fila,
-    // se la aplicamos apenas entra a SELECCIONANDO (en vez de arrancar en la 0).
-    if (evento === 'modo' && ok && preseleccionPendiente != null) {
-      maquina.enviar('seleccionar', { indice: preseleccionPendiente });
-      preseleccionPendiente = null;
-    }
-    if (!ok) socket.emit('accion-rechazada', { evento, estado: maquina.nombre });
+  // --- celus: identidad por token -----------------------------------
+  socket.on('hola', (datos = {}, cb) => {
+    const r = escenario.hola(datos);
+    if (!r.ok) return cb?.(r);
+    const token = datos.token;
+    tokenPorSocket.set(socket.id, token);
+    if (!socketsPorToken.has(token)) socketsPorToken.set(token, new Set());
+    socketsPorToken.get(token).add(socket.id);
+    socket.emit('yo', escenario.yo(token));
+    if (ultimaLetra) socket.emit('letra', ultimaLetra);
+    cb?.({ ok: true, yo: escenario.yo(token) });
   });
 
-  // La pantalla avisa cuando la cancion termino.
-  socket.on('cancion-fin', () => maquina.enviar('fin'));
+  // todo intent de celu pasa por aca: sin token no hay nada que hacer
+  // (y un tope por socket: un celu roto o malicioso no puede inundar al server)
+  let ventana = 0;
+  let enVentana = 0;
+  const intent = (cb, fn) => {
+    const ahora = Date.now();
+    if (ahora - ventana > 1000) { ventana = ahora; enVentana = 0; }
+    if (++enVentana > 30) return cb?.({ ok: false, error: 'Muy rápido, esperá un segundo' });
+    const token = tokenPorSocket.get(socket.id);
+    if (!token) return cb?.({ ok: false, error: 'Sin sesión: recargá la página' });
+    cb?.(fn(token));
+  };
 
-  // Puntaje calculado por la pantalla (performance) al terminar. Capturamos
-  // quien canto/que cancion antes de "fin": ese evento dispara sala.liberar()
-  // (via el onCambio de la maquina) y ahi se pierde el "cantando" actual.
-  socket.on('puntaje', ({ valor, reacciones } = {}) => {
-    const cantando = sala.snapshot().cantando;
-    const { sesionId, cancion } = maquina.snapshot();
-    maquina.enviar('fin', { puntaje: valor });
-    guardarPuntaje({
-      sesionId,
-      nombre: cantando?.nombre,
-      puntaje: maquina.snapshot().puntaje, // ya redondeado/con fallback por la maquina
-      cancion,
-      reacciones,
-    });
-  });
-
-  // --- Sala: se anota alguien desde el celu / manda una reaccion ------
-  socket.on('sala:unirse', ({ codigo, nombre } = {}, cb) => {
-    if (String(codigo || '').trim().toUpperCase() !== sala.codigo) {
-      return cb?.({ ok: false, error: 'Ese código no existe. Fijate en la pantalla.' });
-    }
-    const r = sala.anotarse(nombre);
-    console.log(`[sala] ${rol} se anota:`, nombre, r.ok ? `-> #${r.posicion}` : `RECHAZADO (${r.error})`);
-    cb?.(r);
-  });
-
-  // Mientras espera su turno, el "llamado" ya elige la cancion desde el celu.
-  socket.on('sala:preseleccionar', ({ id, indice } = {}, cb) => {
-    const ok = sala.preseleccionar(id, indice);
-    cb?.({ ok });
-  });
-
-  socket.on('sala:reaccion', ({ emoji, id } = {}) => {
-    if (typeof emoji !== 'string' || !emoji || emoji.length > 8) return;
-    const nombre = sala.buscarNombre(id) || null;
-    io.emit('reaccion', { emoji, nombre });
-  });
-
-  socket.on('sala:salir', ({ id } = {}) => id && sala.salir(id));
-
-  // Alguien manda la clave de copiloto de la ronda actual desde su celu.
-  socket.on('sala:copiloto', ({ codigo, clave, nombre } = {}, cb) => {
-    if (String(codigo || '').trim().toUpperCase() !== sala.codigo) {
-      return cb?.({ ok: false, error: 'Ese código no existe. Fijate en la pantalla.' });
-    }
-    const r = sala.reclamarCopiloto(clave, nombre);
-    console.log(`[sala] ${rol} reclama copiloto:`, r.ok ? 'OK' : `RECHAZADO (${r.error})`);
-    cb?.(r);
-  });
-
-  // La pantalla manda la linea actual de la letra para el celu del copiloto
-  // (no duplicamos el parseo del .lrc ahi, solo mostramos lo que ya calculo).
-  socket.on('letra-actual', ({ actual, siguiente } = {}) => {
-    io.emit('letra-actual', { actual: actual || '', siguiente: siguiente || '' });
-  });
-
-  socket.on('disconnect', () =>
-    console.log(`[socket] desconexion (${rol}) ${socket.id}`)
+  socket.on('fila:entrar', ({ nombre } = {}, cb) => intent(cb, (t) => escenario.entrarFila(t, nombre)));
+  socket.on('fila:salir', (_d, cb) => intent(cb, (t) => escenario.salirFila(t)));
+  socket.on('cancion:elegir', ({ cancionId, modo } = {}, cb) => intent(cb, (t) => escenario.elegirCancion(t, cancionId, modo)));
+  socket.on('turno:listo', (_d, cb) => intent(cb, (t) => escenario.listo(t)));
+  socket.on('cantante:terminar', (_d, cb) => intent(cb, (t) => escenario.terminar(t)));
+  socket.on('copiloto:unirse', ({ codigo } = {}, cb) => intent(cb, (t) => escenario.unirseCopiloto(t, codigo)));
+  socket.on('copiloto:salir', (_d, cb) => intent(cb, (t) => escenario.salirCopiloto(t)));
+  socket.on('reaccion', ({ tipo } = {}, cb) =>
+    intent(cb, (t) => {
+      const r = escenario.reaccionar(t, tipo);
+      if (r.ok) io.emit('reaccion', { tipo: r.tipo, nombre: r.nombre, contada: r.contada, totales: r.totales });
+      return { ok: r.ok, limitada: r.limitada };
+    })
   );
+
+  // --- pantalla primaria ---------------------------------------------
+  const soloPantalla = (fn) => (...args) => {
+    if (socket.id === pantallaPrimaria) fn(...args);
+  };
+  socket.on('pantalla:salud', soloPantalla((d = {}) => escenario.pantallaSalud(d)));
+  socket.on('pantalla:presencia', soloPantalla(({ hay } = {}) => escenario.pantallaPresencia(!!hay)));
+  socket.on('pantalla:retos', soloPantalla(({ puntos } = {}) => escenario.pantallaRetos(Number(puntos))));
+  socket.on('pantalla:fin', soloPantalla(({ progreso } = {}) => escenario.pantallaFin({ progreso: Number(progreso) })));
+  // la cancion se confirma con la mano, en el escenario
+  socket.on('pantalla:confirmar', soloPantalla(({ cancionId } = {}) => escenario.pantallaConfirmar({ cancionId })));
+  socket.on('pantalla:reiniciar', soloPantalla(() => escenario.reinicioSeguro()));
+  // la linea de letra actual, para el teleprompter del copiloto
+  socket.on('pantalla:letra', soloPantalla(({ actual, siguiente } = {}) => {
+    ultimaLetra = { actual: String(actual || '').slice(0, 200), siguiente: String(siguiente || '').slice(0, 200) };
+    io.emit('letra', ultimaLetra);
+  }));
+
+  socket.on('disconnect', () => {
+    console.log(`[socket] desconexion (${rol}) ${socket.id}`);
+    const token = tokenPorSocket.get(socket.id);
+    tokenPorSocket.delete(socket.id);
+    if (token) {
+      const set = socketsPorToken.get(token);
+      set?.delete(socket.id);
+      if (!set || !set.size) {
+        socketsPorToken.delete(token);
+        escenario.desconectar(token);
+      }
+    }
+    if (socket.id === pantallaPrimaria) {
+      pantallaPrimaria = null;
+      escenario.pantallaDesconectada();
+    }
+  });
 });
 
 // --- Arranque ---------------------------------------------------
 httpServer.listen(PORT, () => {
   const front = SERVIR_BUILD ? PORT : WEB_PORT;
-  console.log('\n  Karaoke interactivo - el cerebro');
-  console.log('  ---------------------------------');
-  console.log(`  Socket.IO / API   : http://localhost:${PORT}`);
+  console.log('\n  Karaoke interactivo - el cerebro (una sola sala)');
+  console.log('  ------------------------------------------------');
+  console.log(`  Socket.IO / API    : http://localhost:${PORT}`);
   console.log(`  Pantalla principal : http://localhost:${front}/  ${SERVIR_BUILD ? '(build)' : '(astro dev)'}`);
-  console.log(`  Estado inicial     : ${ESTADOS.ESPERANDO}`);
+  console.log(`  Celulares (QR)     : ${FRONTEND_PUBLICO || `http://${ipLocal()}:${front}`}/sala`);
   console.log(`  Canciones cargadas : ${canciones.length}`);
-  console.log('  Control: manos (MediaPipe) + voz, desde la camara de la pantalla\n');
+  console.log('  Control: desde los celulares; la camara de la pantalla es opcional\n');
 
   // Chequeo de arranque: si ffmpeg-static no bajo bien su binario (build raro,
   // restriccion de red, etc.) la conversion de video falla en silencio y solo

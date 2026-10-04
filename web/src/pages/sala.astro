@@ -8,191 +8,223 @@ import Base from '../layouts/Base.astro';
     <div class="halftone h2"></div>
   </div>
 
-  <main class="salaPagina">
+  <div id="sinConexion" hidden>📡 reconectando…</div>
+  <div id="aviso" hidden></div>
+
+  <main class="app">
     <p class="kicker">karaoke studio</p>
-    <h1 class="cartel" style="font-size: clamp(2rem, 11vw, 3.2rem);">Sumate<br>a la sala</h1>
 
-    <form id="formUnirse" class="tarjeta">
-      <label>
-        Código de la sala
-        <input id="inCodigo" type="text" maxlength="4" placeholder="ABCD" autocapitalize="characters" required />
-      </label>
-      <label>
-        Tu nombre
-        <input id="inNombre" type="text" maxlength="24" placeholder="¿Cómo te llamás?" required />
-      </label>
-      <p id="error" class="error" hidden></p>
-      <button id="btnUnirse" class="grande" type="submit">Unirme</button>
-    </form>
-
-    <section id="pantallaEnFila" class="tarjeta" hidden>
-      <p id="estadoFila" class="estadoFila">Estás en la fila…</p>
-
-      <div id="cancionesBox" hidden>
-        <p class="kicker">Elegí tu canción para cuando te toque</p>
-        <ul id="cancionesLista"></ul>
+    <!-- PUBLIC: recién llegó o está mirando -->
+    <section id="vPublico" class="vista" hidden>
+      <h1 class="cartel titulo">Sumate<br>al karaoke</h1>
+      <div class="tarjeta" id="ahoraBox">
+        <p class="kicker" id="ahoraKicker">ahora</p>
+        <p class="grandeTxt" id="ahoraTexto">Escenario libre</p>
+        <p class="chico" id="ahoraCancion"></p>
+        <div class="barra" id="ahoraBarra" hidden><span></span></div>
+        <p class="chico" id="ahoraSigue"></p>
       </div>
-
-      <div id="reaccionesBox">
-        <p class="kicker">Mandale una reacción a quien está cantando</p>
-        <div id="reacciones">
-          <button data-emoji="❤️">❤️</button>
-          <button data-emoji="🔥">🔥</button>
-          <button data-emoji="👏">👏</button>
-          <button data-emoji="😂">😂</button>
-          <button data-emoji="⭐">⭐</button>
+      <div class="reacciones" data-reacciones></div>
+      <div class="tarjeta">
+        <label id="lblNombre">
+          Tu nombre
+          <input id="inNombre" type="text" maxlength="24" placeholder="¿Cómo te llamás?" autocomplete="off" />
+        </label>
+        <p id="errPublico" class="error" hidden></p>
+        <button id="btnCantar" class="boton">🎤 Quiero cantar</button>
+        <button id="btnCopiloto" class="link">Tengo un código de copiloto</button>
+        <div id="boxCopiloto" hidden>
+          <label>
+            Código de 4 letras
+            <input id="inCodigo" type="text" maxlength="4" placeholder="ABCD" autocapitalize="characters" autocomplete="off" />
+          </label>
+          <button id="btnUnirCopiloto" class="boton chicoBtn">Ayudar a cantar 🤝</button>
         </div>
       </div>
+    </section>
 
+    <!-- QUEUED: en la fila, prepara su canción -->
+    <section id="vFila" class="vista" hidden>
+      <div class="tarjeta destacada">
+        <p class="kicker">tu lugar en la fila</p>
+        <p class="numerote" id="filaPos">1</p>
+        <p class="grandeTxt" id="filaEta"></p>
+        <p class="chico" id="filaAhora"></p>
+      </div>
+      <div class="tarjeta" data-selector>
+        <p class="kicker">tu canción</p>
+        <p class="grandeTxt" id="filaCancion">Todavía no elegiste</p>
+        <div class="modo">
+          <button data-modo="solo">Solo</button>
+          <button data-modo="duo">Dúo</button>
+        </div>
+        <input class="buscar" type="search" placeholder="Buscar canción o artista" autocomplete="off" />
+        <ul class="canciones"></ul>
+      </div>
+      <div class="tarjeta" id="boxCodigo" hidden>
+        <p class="kicker">invitar copiloto 🤝</p>
+        <p class="codigo" id="codigoCopiloto"></p>
+        <p class="chico" id="copilotoEstado">Que escriba este código en su celu para ayudarte con la letra.</p>
+      </div>
+      <div class="reacciones chicas" data-reacciones></div>
       <button id="btnSalir" class="link">Salir de la fila</button>
     </section>
 
-    <section id="pantallaCopiloto" class="tarjeta" hidden>
-      <p class="kicker">sos el copiloto 🤝</p>
-      <p id="copilotoError" class="error" hidden></p>
-      <p id="copilotoActual" class="letraCopiloto">Esperando que arranque la canción…</p>
-      <p id="copilotoSiguiente" class="letraCopilotoSig"></p>
+    <!-- CALLED: le toca -->
+    <section id="vTurno" class="vista" hidden>
+      <div class="tarjeta destacada turno">
+        <p class="kicker">¡es tu turno!</p>
+        <h2 class="cartel titulo" id="turnoTitulo">¡Pasá al frente!</h2>
+        <p class="grandeTxt" id="turnoCancion"></p>
+        <p class="chico" id="turnoAyuda"></p>
+        <div class="barra" id="turnoBarra"><span></span></div>
+      </div>
+      <button id="btnListo" class="boton" hidden>▶ Empezar desde el celu</button>
+      <div class="tarjeta" data-selector>
+        <p class="kicker">cambiar canción</p>
+        <div class="modo">
+          <button data-modo="solo">Solo</button>
+          <button data-modo="duo">Dúo</button>
+        </div>
+        <input class="buscar" type="search" placeholder="Buscar canción o artista" autocomplete="off" />
+        <ul class="canciones"></ul>
+      </div>
+      <button id="btnCancelarTurno" class="link">Cancelar mi turno</button>
+    </section>
+
+    <!-- COUNTDOWN -->
+    <section id="vCuenta" class="vista" hidden>
+      <p class="kicker">preparate</p>
+      <p class="cuentaGrande" id="cuentaNum">3</p>
+      <p class="grandeTxt" id="cuentaCancion"></p>
+    </section>
+
+    <!-- SINGING -->
+    <section id="vCantando" class="vista" hidden>
+      <div class="tarjeta destacada">
+        <p class="kicker">estás cantando 🎤</p>
+        <p class="grandeTxt" id="cantaCancion"></p>
+        <div class="barra"><span id="cantaProgreso"></span></div>
+        <p class="contadores" id="cantaReacc"></p>
+      </div>
+      <div class="tarjeta teleprompter">
+        <p class="letraActual" id="cantaLetra">…</p>
+        <p class="letraSig" id="cantaLetraSig"></p>
+      </div>
+      <button id="btnTerminar" class="link">Terminar canción</button>
+    </section>
+
+    <!-- DONE -->
+    <section id="vResultado" class="vista" hidden>
+      <h1 class="cartel titulo" id="resTitulo">¡Sos una popstar!</h1>
+      <p class="chico" id="resMotivo" hidden></p>
+      <div class="tarjeta destacada">
+        <p class="numerote" id="resTotal">0</p>
+        <p class="kicker">puntos</p>
+        <p class="chico" id="resDesglose"></p>
+        <p class="contadores" id="resReacc"></p>
+      </div>
+      <div class="tarjeta">
+        <p class="kicker">tu video</p>
+        <p class="chico" id="resVideoEstado">Se está preparando (puede tardar un minuto).</p>
+        <a id="resVideo" class="boton" href="#" target="_blank" rel="noopener" hidden>⬇ Ver / descargar mi video</a>
+      </div>
+      <button id="btnDeNuevo" class="boton">🎤 Cantar de nuevo</button>
+      <button id="btnSeguirMirando" class="link">Seguir mirando</button>
+    </section>
+
+    <!-- COPILOTO -->
+    <section id="vCopiloto" class="vista" hidden>
+      <div class="tarjeta destacada">
+        <p class="kicker">sos el copiloto 🤝</p>
+        <p class="grandeTxt" id="copiDe"></p>
+        <p class="chico" id="copiEstado"></p>
+      </div>
+      <div class="tarjeta teleprompter">
+        <p class="letraActual" id="copiLetra">Esperando que arranque la canción…</p>
+        <p class="letraSig" id="copiLetraSig"></p>
+      </div>
+      <div class="reacciones chicas" data-reacciones></div>
+      <button id="btnSalirCopiloto" class="link">Dejar de ser copiloto</button>
     </section>
   </main>
 
   <style>
     body { overflow-y: auto; }
-    .salaPagina {
+    .app {
       min-height: 100%;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 2.2vh;
-      padding: 6vh 6vw 4vh;
+      gap: 1rem;
+      padding: 4vh 5vw 6vh;
       text-align: center;
       position: relative;
       z-index: 1;
     }
+    .vista { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 1rem; align-items: center; }
+    .vista[hidden] { display: none; }
+    .titulo { font-size: clamp(2rem, 11vw, 3.2rem); }
     .tarjeta {
       width: 100%;
-      max-width: 380px;
-      background: rgba(255, 255, 255, 0.7);
+      background: rgba(255, 255, 255, 0.78);
       border: 3px solid var(--tinta);
       border-radius: 1.2rem;
-      padding: 1.6rem;
+      padding: 1.2rem;
       display: flex;
       flex-direction: column;
-      gap: 1rem;
+      gap: 0.8rem;
       box-shadow: 6px 6px 0 var(--rosa);
     }
-    label {
-      display: flex;
-      flex-direction: column;
-      gap: 0.4rem;
-      text-align: left;
-      font-family: var(--body);
-      font-weight: 700;
-      font-size: 0.85rem;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
+    .tarjeta.destacada { background: #fff; }
+    .tarjeta.turno { background: var(--rosa-hot); color: #fff; border-color: var(--tinta); box-shadow: 6px 6px 0 var(--tinta); }
+    .tarjeta.turno .kicker, .tarjeta.turno .chico { color: #fff; opacity: 0.95; }
+    .grandeTxt { font-family: var(--fat); text-transform: uppercase; font-size: 1.35rem; line-height: 1.15; }
+    .chico { font-family: var(--body); font-weight: 600; font-size: 0.9rem; opacity: 0.75; }
+    .numerote { font-family: var(--fat); font-size: 4.5rem; line-height: 1; }
+    .cuentaGrande { font-family: var(--fat); font-size: 11rem; line-height: 1; color: var(--rosa-hot); }
+    .codigo { font-family: var(--fat); font-size: 2.6rem; letter-spacing: 0.25em; padding-left: 0.25em; }
+    label { display: flex; flex-direction: column; gap: 0.4rem; text-align: left; font-family: var(--body); font-weight: 700; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
     input {
-      font: inherit;
-      font-family: var(--fat);
-      font-size: 1.3rem;
-      text-transform: uppercase;
-      padding: 0.7rem 0.9rem;
-      border: 2px solid var(--tinta);
-      border-radius: 0.6rem;
-      background: #fff;
-      color: var(--tinta);
+      font: inherit; font-family: var(--fat); font-size: 1.2rem; text-transform: uppercase;
+      padding: 0.7rem 0.9rem; border: 2px solid var(--tinta); border-radius: 0.6rem; background: #fff; color: var(--tinta); width: 100%;
     }
     input:focus { outline: 3px solid var(--rosa); outline-offset: 1px; }
-    .grande {
-      font-family: var(--fat);
-      text-transform: uppercase;
-      font-size: 1.2rem;
-      color: #fff;
-      background: var(--rosa-hot);
-      border: 0;
-      border-radius: 999px;
-      padding: 1rem;
-      cursor: pointer;
+    input.buscar { font-size: 1rem; text-transform: none; font-family: var(--body); font-weight: 600; }
+    .boton {
+      font-family: var(--fat); text-transform: uppercase; font-size: 1.15rem; color: #fff; background: var(--rosa-hot);
+      border: 3px solid var(--tinta); border-radius: 999px; padding: 1rem 1.2rem; cursor: pointer; width: 100%;
+      text-decoration: none; display: block; text-align: center;
     }
-    .grande:disabled { opacity: 0.6; }
-    .link {
-      background: none;
-      border: 0;
-      color: var(--tinta);
-      opacity: 0.6;
-      text-decoration: underline;
-      font-family: var(--body);
-      cursor: pointer;
-    }
-    .error { color: var(--rosa-hot); font-weight: 700; font-family: var(--body); }
-    .estadoFila {
-      font-family: var(--fat);
-      text-transform: uppercase;
-      font-size: 1.2rem;
-      line-height: 1.2;
-    }
-    #reacciones {
-      display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 0.5rem;
-      margin-top: 0.8rem;
-    }
-    #reacciones button {
-      font-size: 1.8rem;
-      background: #fff;
-      border: 2px solid var(--tinta);
-      border-radius: 0.7rem;
-      padding: 0.6rem 0;
-      cursor: pointer;
-      transition: transform 0.15s;
-    }
-    #reacciones button.tocado { transform: scale(1.3) rotate(-8deg); }
-    #cancionesLista {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-      margin-top: 0.6rem;
-      max-height: 40vh;
-      overflow-y: auto;
-    }
-    /* los <li> se crean por JS (sala.js): sin :global Astro no los ve,
-       porque no tienen el atributo de scope del componente. */
-    #cancionesLista :global(li) {
-      font-family: var(--body);
-      font-weight: 700;
-      text-align: left;
-      background: #fff;
-      border: 2px solid var(--tinta);
-      border-radius: 0.6rem;
-      padding: 0.6rem 0.8rem;
-      cursor: pointer;
-    }
-    #cancionesLista :global(li .art) {
-      display: block;
-      font-weight: 500;
-      opacity: 0.65;
-      font-size: 0.8em;
-      margin-top: 0.15rem;
-    }
-    #cancionesLista :global(li.elegida) {
-      background: var(--rosa-hot);
-      color: #fff;
-      border-color: var(--rosa-hot);
-    }
-    #cancionesLista :global(li.elegida .art) { opacity: 0.85; }
-    .letraCopiloto {
-      font-family: var(--fat);
-      text-transform: uppercase;
-      font-size: 1.5rem;
-      line-height: 1.15;
-    }
-    .letraCopilotoSig {
-      font-family: var(--body);
-      font-weight: 600;
-      opacity: 0.55;
-      font-size: 1rem;
-    }
+    .boton.chicoBtn { font-size: 1rem; padding: 0.7rem 1rem; margin-top: 0.6rem; }
+    .boton:disabled { opacity: 0.55; }
+    .boton:active { transform: translateY(2px); }
+    .link { background: none; border: 0; color: var(--tinta); opacity: 0.65; text-decoration: underline; font-family: var(--body); font-size: 0.95rem; cursor: pointer; padding: 0.5rem; }
+    .error { color: var(--rosa-hot); font-weight: 700; font-family: var(--body); font-size: 0.9rem; }
+    .barra { width: 100%; height: 10px; background: rgba(22, 21, 19, 0.15); border-radius: 99px; overflow: hidden; }
+    .barra[hidden] { display: none; }
+    .barra span { display: block; height: 100%; width: 0; background: var(--rosa-hot); border-radius: 99px; }
+    .tarjeta.turno .barra { background: rgba(255, 255, 255, 0.3); }
+    .tarjeta.turno .barra span { background: #fff; }
+    .modo { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+    .modo button { font-family: var(--fat); text-transform: uppercase; padding: 0.55rem; border: 2px solid var(--tinta); border-radius: 0.6rem; background: #fff; cursor: pointer; }
+    .modo button.on { background: var(--tinta); color: #fff; }
+    .canciones { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; max-height: 42vh; overflow-y: auto; }
+    .canciones :global(li) { font-family: var(--body); font-weight: 700; text-align: left; background: #fff; border: 2px solid var(--tinta); border-radius: 0.6rem; padding: 0.6rem 0.8rem; cursor: pointer; }
+    .canciones :global(li .art) { display: block; font-weight: 500; opacity: 0.65; font-size: 0.8em; margin-top: 0.15rem; }
+    .canciones :global(li.elegida) { background: var(--rosa-hot); color: #fff; border-color: var(--rosa-hot); }
+    .canciones :global(li.elegida .art) { opacity: 0.9; }
+    .reacciones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; width: 100%; }
+    .reacciones :global(button) { font-size: 2.4rem; background: #fff; border: 3px solid var(--tinta); border-radius: 1rem; padding: 0.9rem 0; cursor: pointer; transition: transform 0.15s; box-shadow: 3px 3px 0 var(--tinta); }
+    .reacciones.chicas :global(button) { font-size: 1.7rem; padding: 0.5rem 0; }
+    .reacciones :global(button.tocado) { transform: scale(1.18) rotate(-6deg); }
+    .contadores { font-family: var(--fat); font-size: 1.3rem; letter-spacing: 0.05em; }
+    .teleprompter { text-align: center; }
+    .letraActual { font-family: var(--fat); text-transform: uppercase; font-size: 1.6rem; line-height: 1.15; }
+    .letraSig { font-family: var(--body); font-weight: 600; opacity: 0.55; font-size: 1rem; }
+    #aviso { position: fixed; top: 0; left: 0; right: 0; z-index: 10; background: var(--tinta); color: #fff; font-family: var(--body); font-weight: 700; padding: 0.8rem 1rem; text-align: center; }
+    #aviso[hidden], #sinConexion[hidden] { display: none; }
+    #sinConexion { position: fixed; bottom: 0; left: 0; right: 0; z-index: 10; background: var(--rosa-hot); color: #fff; font-family: var(--body); font-weight: 700; padding: 0.6rem; text-align: center; }
   </style>
 
   <script>
