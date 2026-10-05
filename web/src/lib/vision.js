@@ -44,6 +44,8 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
   let cara = null; // { cx, cy, w, h } normalizada y espejada
   let caraVistaT = 0;
   let proximaCara = 0;
+  let proximaDeteccion = 0;
+  let costoDeteccion = 0; // ms que tarda una deteccion (media movil)
 
   function loop() {
     if (!corriendo) return;
@@ -51,12 +53,22 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
       ultimoT = video.currentTime;
       const ts = performance.now();
 
+      // Si la deteccion es cara (PC lenta, sin GPU) se espacia para que como maximo use
+      // la mitad del tiempo: el hilo principal tambien dibuja la pantalla y GRABA el video,
+      // y si MediaPipe se lo come todo el video sale a 3 cuadros por segundo.
+      if (ts < proximaDeteccion) {
+        requestAnimationFrame(loop);
+        return;
+      }
       let manosRes;
       try {
         manosRes = handLandmarker.detectForVideo(video, ts);
       } catch (err) {
         console.warn('[vision] manos:', err.message);
       }
+      const costo = performance.now() - ts;
+      costoDeteccion = costoDeteccion ? costoDeteccion * 0.8 + costo * 0.2 : costo;
+      proximaDeteccion = ts + Math.min(500, costoDeteccion);
 
       if (faceDetector && ts >= proximaCara) {
         proximaCara = ts + 350;

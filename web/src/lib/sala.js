@@ -26,7 +26,6 @@ let ajusteReloj = 0; // serverNow - Date.now()
 let totales = { corazon: 0, fuego: 0, aplauso: 0 };
 let letra = { actual: '', siguiente: '' };
 let canciones = [];
-let modoPref = 'solo';
 let filtro = '';
 let resultadoOculto = leer('karaoke:resultadoOculto') || '';
 let vistaPrevia = '';
@@ -252,7 +251,9 @@ function renderFila() {
     $('codigoCopiloto').textContent = yo.codigoCopiloto;
     $('copilotoEstado').textContent = yo.copiloto
       ? `${yo.copiloto.nombre} es tu copiloto 🤝`
-      : 'Que escriba este código en su celu para ayudarte con la letra.';
+      : yo.modo === 'duo'
+        ? 'Dúo: pasale este código a tu compañero/a. Va a cantar la VOZ 2.'
+        : 'Que escriba este código en su celu para ayudarte con la letra.';
   }
 }
 
@@ -292,7 +293,23 @@ function pintarContadores() {
   $('cantaReacc').textContent = `❤️ ${totales.corazon || 0}   🔥 ${totales.fuego || 0}   👏 ${totales.aplauso || 0}`;
 }
 
+// En un dueto cada linea es de una voz: la 1 es de quien canta y la 2 de su companero
+// (el que entro como copiloto). Cada celu dice de quien es la linea de ahora.
+function etiquetaVoz() {
+  if (est?.actual?.modo !== 'duo' || !letra.voz) return null;
+  const soyCantante = yo?.estado === 'SINGING';
+  const miVoz = soyCantante ? 'p1' : 'p2';
+  const otro = (soyCantante ? yo?.copiloto?.nombre : yo?.copilotoDe?.nombre) || 'tu compañero/a';
+  if (letra.voz === 'both') return { texto: '🎶 Los dos', mia: true };
+  return letra.voz === miVoz ? { texto: '🎤 Te toca a vos', mia: true } : { texto: `⏳ Le toca a ${otro}`, mia: false };
+}
+
 function pintarLetra() {
+  const v = etiquetaVoz();
+  for (const e of document.querySelectorAll('[data-voz-turno]')) {
+    e.hidden = !v;
+    if (v) { e.textContent = v.texto; e.classList.toggle('mia', v.mia); }
+  }
   $('cantaLetra').textContent = letra.actual || '…';
   $('cantaLetraSig').textContent = letra.siguiente || '';
   $('copiLetra').textContent = letra.actual || 'Esperando que arranque la canción…';
@@ -426,12 +443,18 @@ let firmaSelector = '';
 function renderSelectores() {
   if (!yo) return;
   const f = filtro.trim().toLowerCase();
-  const firma = `${yo.cancionId}|${yo.modo}|${modoPref}|${f}|${canciones.length}|${vistaPrevia}`;
+  const firma = `${yo.cancionId}|${yo.modo}|${f}|${canciones.length}|${vistaPrevia}`;
   if (firma === firmaSelector) return;
   firmaSelector = firma;
-  const modo = yo.estado === 'QUEUED' || yo.estado === 'CALLED' ? yo.modo || modoPref : modoPref;
+  const modo = yo.modo || 'solo';
   for (const box of document.querySelectorAll('[data-selector]')) {
     for (const b of box.querySelectorAll('.modo button')) b.classList.toggle('on', b.dataset.modo === modo);
+    const ayuda = box.querySelector('[data-modo-ayuda]');
+    if (ayuda) {
+      ayuda.textContent = modo === 'duo'
+        ? 'A dúo: vos cantás la VOZ 1 y tu compañero/a la VOZ 2 (entra con tu código de copiloto).'
+        : 'Solo: cantás vos toda la canción.';
+    }
     const ul = box.querySelector('.canciones');
     ul.textContent = '';
     for (const c of canciones) {
@@ -452,15 +475,13 @@ function renderSelectores() {
 document.addEventListener('click', (e) => {
   const li = e.target.closest?.('.canciones li');
   if (li) {
-    enviar('cancion:elegir', { cancionId: li.dataset.id, modo: yo?.modo || modoPref });
+    // el modo no se manda: lo que la persona eligio en Solo/Dúo ya esta guardado en el server
+    enviar('cancion:elegir', { cancionId: li.dataset.id });
     return;
   }
   const mb = e.target.closest?.('.modo button');
   if (mb) {
-    modoPref = mb.dataset.modo;
-    if (yo?.cancionId) enviar('cancion:elegir', { cancionId: yo.cancionId, modo: modoPref });
-    firmaSelector = '';
-    renderSelectores();
+    enviar('modo:elegir', { modo: mb.dataset.modo });
   }
 });
 

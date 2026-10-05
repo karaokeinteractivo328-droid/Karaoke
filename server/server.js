@@ -189,6 +189,9 @@ function aMp4(sesion) {
     // 'ultrafast': en Render free la CPU es compartida/lenta y un evento en vivo
     // no puede esperar 3 minutos por cada video; se pierde algo de compresion
     // (archivos un poco mas grandes) a cambio de convertir bastante mas rapido.
+    // MediaRecorder entrega cuadros a ritmo variable: se fija a 30 fps constantes y
+    // rango de color estandar (tv), que es lo que esperan todos los reproductores (iOS incluido)
+    '-vf', 'scale=out_range=tv,format=yuv420p', '-r', '30',
     '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '160k', '-ar', '44100',
     '-max_muxing_queue_size', '4096',
@@ -401,7 +404,13 @@ io.on('connection', (socket) => {
     return { ok: true, yo: escenario.yo(token) };
   };
   if (rol !== 'pantalla' && socket.handshake.auth?.token) registrar(socket.handshake.auth);
-  socket.on('hola', (datos = {}, cb) => cb?.(registrar(datos)));
+  // OJO: `cb?.(fn())` NO ejecuta fn() si no hay callback (cortocircuito): las
+  // acciones sin acuse (ej. el boton de reacciones) no hacian nada. Siempre se
+  // ejecuta primero y despues se responde, si hay a quien.
+  socket.on('hola', (datos = {}, cb) => {
+    const r = registrar(datos);
+    cb?.(r);
+  });
 
   // todo intent de celu pasa por aca: sin token no hay nada que hacer
   // (y un tope por socket: un celu roto o malicioso no puede inundar al server)
@@ -413,11 +422,13 @@ io.on('connection', (socket) => {
     if (++enVentana > 30) return cb?.({ ok: false, error: 'Muy rápido, esperá un segundo' });
     const token = tokenPorSocket.get(socket.id);
     if (!token) return cb?.({ ok: false, error: 'Sin sesión: recargá la página' });
-    cb?.(fn(token));
+    const r = fn(token);
+    cb?.(r);
   };
 
   socket.on('fila:entrar', ({ nombre } = {}, cb) => intent(cb, (t) => escenario.entrarFila(t, nombre)));
   socket.on('fila:salir', (_d, cb) => intent(cb, (t) => escenario.salirFila(t)));
+  socket.on('modo:elegir', ({ modo } = {}, cb) => intent(cb, (t) => escenario.elegirModo(t, modo)));
   socket.on('cancion:elegir', ({ cancionId, modo } = {}, cb) => intent(cb, (t) => escenario.elegirCancion(t, cancionId, modo)));
   socket.on('turno:listo', (_d, cb) => intent(cb, (t) => escenario.listo(t)));
   socket.on('cantante:terminar', (_d, cb) => intent(cb, (t) => escenario.terminar(t)));
@@ -439,7 +450,10 @@ io.on('connection', (socket) => {
   socket.on('pantalla:salud', soloPantalla((d = {}) => escenario.pantallaSalud(d)));
   socket.on('pantalla:presencia', soloPantalla(({ hay } = {}) => escenario.pantallaPresencia(!!hay)));
   socket.on('pantalla:retoCumplido', soloPantalla((d = {}) => escenario.pantallaRetoCumplido(d)));
-  socket.on('pantalla:retoPalabra', soloPantalla((d = {}, cb) => cb?.(escenario.pantallaRetoPalabra(d))));
+  socket.on('pantalla:retoPalabra', soloPantalla((d = {}, cb) => {
+    const r = escenario.pantallaRetoPalabra(d);
+    cb?.(r);
+  }));
   socket.on('pantalla:retoResponder', soloPantalla((d = {}) => escenario.pantallaRetoResponder(d)));
   socket.on('pantalla:retoFin', soloPantalla((d = {}) => escenario.pantallaRetoFin(d)));
   socket.on('pantalla:videoError', soloPantalla(({ token } = {}) => { if (idOk(token) && videoTokens.has(token)) videoErrores.set(token, 'subida'); }));
@@ -448,8 +462,12 @@ io.on('connection', (socket) => {
   socket.on('pantalla:confirmar', soloPantalla(({ cancionId } = {}) => escenario.pantallaConfirmar({ cancionId })));
   socket.on('pantalla:reiniciar', soloPantalla(() => escenario.reinicioSeguro()));
   // la linea de letra actual, para el teleprompter del copiloto
-  socket.on('pantalla:letra', soloPantalla(({ actual, siguiente } = {}) => {
-    ultimaLetra = { actual: String(actual || '').slice(0, 200), siguiente: String(siguiente || '').slice(0, 200) };
+  socket.on('pantalla:letra', soloPantalla(({ actual, siguiente, voz } = {}) => {
+    ultimaLetra = {
+      actual: String(actual || '').slice(0, 200),
+      siguiente: String(siguiente || '').slice(0, 200),
+      voz: ['p1', 'p2', 'both'].includes(voz) ? voz : null, // de quien es la linea (dueto)
+    };
     io.emit('letra', ultimaLetra);
   }));
 

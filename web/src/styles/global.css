@@ -473,8 +473,8 @@ body[data-estado="PLAYING"] #qrFijo img { width: clamp(64px, 10vmin, 120px); }
   color: var(--voz);
   margin-bottom: 0.3em;
 }
-#lineaActual[data-voz="p1"]::before { content: "VOZ 1"; }
-#lineaActual[data-voz="p2"]::before { content: "VOZ 2"; }
+#lineaActual[data-voz="p1"]::before { content: "VOZ 1" attr(data-n1); }
+#lineaActual[data-voz="p2"]::before { content: "VOZ 2" attr(data-n2); }
 #lineaActual[data-voz="both"]::before { content: "LOS DOS"; }
 
 #lineaSiguiente {

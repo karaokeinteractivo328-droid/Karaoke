@@ -135,6 +135,7 @@ export function crearEscenario({
       copilotoDe: null, // token del cantante al que ayudo
       ultimaReaccion: 0,
       ultimoResultado: null,
+      modoManual: null, // 'solo' | 'duo' si la persona lo eligio con el selector
       ultimoVideoToken: null,
       mensaje: null,
     };
@@ -192,7 +193,7 @@ export function crearEscenario({
     // el server se reinicio y este celu estaba en fila: se re-anota solo
     if (nuevo && intencion?.enFila && p.nombre) {
       if (porId(intencion.cancionId)) p.cancionId = intencion.cancionId;
-      if (intencion.modo === 'duo') p.modo = 'duo';
+      if (intencion.modo === 'duo' || intencion.modo === 'solo') p.modoManual = p.modo = intencion.modo;
       entrarFilaInterno(p);
     }
     marcar();
@@ -251,6 +252,29 @@ export function crearEscenario({
     return { ok: true };
   }
 
+  // Solo o dueto: CUALQUIER cancion se puede cantar de las dos formas y lo elige la
+  // persona en el selector (si no toca nada, solo).
+  const modoEfectivo = (p) => p.modoManual ?? 'solo';
+
+  function elegirModo(token, modo) {
+    const p = participantes.get(token);
+    if (!p) return { ok: false, error: 'Sesión no encontrada' };
+    if (modo !== 'solo' && modo !== 'duo') return { ok: false, error: 'Modo inválido' };
+    if (p.estado !== ESTADOS_P.QUEUED && p.estado !== ESTADOS_P.CALLED) {
+      return { ok: false, error: 'Primero anotate en la fila' };
+    }
+    if (p.estado === ESTADOS_P.CALLED && actual?.token === token && etapa !== ETAPAS.CALLING) {
+      return { ok: false, error: 'Ya empezó tu turno' };
+    }
+    p.modoManual = modo;
+    p.modo = modoEfectivo(p);
+    if (p.estado === ESTADOS_P.CALLED && actual?.token === token) actual.modo = p.modo;
+    p.ultimaActividad = ahora();
+    marcar();
+    emitirSiCambio();
+    return { ok: true, modo: p.modo };
+  }
+
   function elegirCancion(token, cancionId, modo) {
     const p = participantes.get(token);
     if (!p) return { ok: false, error: 'Sesión no encontrada' };
@@ -262,7 +286,8 @@ export function crearEscenario({
       return { ok: false, error: 'Ya empezó tu turno' };
     }
     p.cancionId = cancionId;
-    if (modo === 'solo' || modo === 'duo') p.modo = modo;
+    if (modo === 'solo' || modo === 'duo') p.modoManual = modo;
+    p.modo = modoEfectivo(p);
     p.ultimaActividad = ahora();
     if (p.estado === ESTADOS_P.CALLED && actual?.token === token) {
       actual.cancionId = p.cancionId;
@@ -355,6 +380,7 @@ export function crearEscenario({
     if (!p) return { ok: false, error: 'Sesión no encontrada' };
     if (!porId(cancionId)) return { ok: false, error: 'Esa canción no existe' };
     p.cancionId = cancionId;
+    p.modo = modoEfectivo(p);
     p.ultimaActividad = ahora();
     empezarCountdown(p);
     emitirSiCambio();
@@ -743,6 +769,7 @@ export function crearEscenario({
       nombre: p?.nombre || 'Alguien',
       cancion: cancionPublica(actual.cancionId),
       modo: actual.modo,
+      copiloto: (p?.copiloto && participantes.get(p.copiloto)?.nombre) || null,
       fase: etapa === ETAPAS.CALLING ? 'eligiendo' : null,
       preparada: !!actual.cancionId,
       llamadoDesde: actual.llamadoDesde,
@@ -905,6 +932,7 @@ export function crearEscenario({
     entrarFila,
     salirFila,
     elegirCancion,
+    elegirModo,
     listo,
     terminar,
     reaccionar,

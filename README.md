@@ -135,6 +135,18 @@ registrada: después de reiniciar el server, el primer toque en "Quiero cantar" 
 "Empezar" funciona (antes podía llegar antes que el `hola` y el server contestaba
 "Sin sesión").
 
+### Solo o dúo (cualquier canción)
+
+**Todas las canciones se pueden cantar solo o a dúo** y lo elige la persona con el selector
+**🎤 Solo / 👥 Dúo** del celu (mientras espera o cuando le toca). La pantalla grande muestra
+"solo" o "a dúo · voz 1 y voz 2" en el turno.
+
+- En dúo la letra se reparte sola entre **VOZ 1** (quien canta) y **VOZ 2** (su compañero/a,
+  que entra con el código de copiloto) y **LOS DOS** en los estribillos, cada voz de un color
+  ([duo.js](web/src/lib/duo.js)). Arriba de cada línea dice "VOZ 1 · IARA" / "VOZ 2 · ROCÍO".
+- Los celus también lo dicen: **🎤 Te toca a vos** / **⏳ Le toca a Rocío** / **🎶 Los dos**.
+- Cambiar de canción no cambia la elección. El modo se puede cambiar hasta que arranca el turno.
+
 ### Puntaje (100 puntos, entendible)
 
 `Canción (0–40)` = 40 × lo que se cantó · `Retos (0–30)` = 3 retos de 10 puntos ·

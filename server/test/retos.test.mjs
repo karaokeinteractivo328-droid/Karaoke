@@ -6,6 +6,7 @@ import { crearEscenario, ETAPAS } from '../escenario.js';
 const CANCIONES = [
   { id: 'a', titulo: 'Cancion A', artista: 'Artista A', duracion: 100 },
   { id: 'b', titulo: 'Cancion B', artista: 'Artista B', duracion: 120 },
+  { id: 'd', titulo: 'Dueto D', artista: 'Artista D', duracion: 100, voces: 'duo' },
 ];
 const tk = (n) => `token-${n}`.padEnd(20, 'x');
 
@@ -195,4 +196,74 @@ test('palabra: el reto no sobrevive a la performance', () => {
   m.e.pantallaFin({ progreso: 1 });
   m.avanzar(m.e.config.RESULT_MS);
   assert.equal(m.e.snapshot().actual?.retoPalabra ?? null, null);
+});
+
+// -------------------------------------------------------------------- duetos
+test('dueto: tocar "Duo" ANTES de elegir cancion se respeta (antes la cancion lo pisaba)', () => {
+  const m = mundo();
+  const a = m.persona(1, 'A');
+  const b = m.persona(2, 'B');
+  m.e.entrarFila(b); // B canta; A espera
+  m.e.entrarFila(a);
+  assert.equal(m.e.elegirModo(a, 'duo').ok, true);
+  assert.equal(m.e.yo(a).modo, 'duo');
+  m.e.elegirCancion(a, 'a'); // una cancion comun, sin tocar el modo
+  assert.equal(m.e.yo(a).modo, 'duo', 'el modo elegido a mano no se pisa');
+  assert.equal(m.e.elegirModo(a, 'solo').ok, true);
+  assert.equal(m.e.yo(a).modo, 'solo');
+});
+
+test('dueto: CUALQUIER cancion se puede cantar solo o a dueto, lo elige la persona', () => {
+  const m = mundo();
+  const a = m.persona(1, 'A');
+  const b = m.persona(2, 'B');
+  m.e.entrarFila(b);
+  m.e.entrarFila(a);
+  for (const cancion of ['a', 'b', 'd']) {
+    m.e.elegirCancion(a, cancion);
+    assert.equal(m.e.yo(a).modo, 'solo', `${cancion}: sin tocar nada es solo (aunque venga marcada como dueto)`);
+    assert.equal(m.e.elegirModo(a, 'duo').ok, true);
+    assert.equal(m.e.yo(a).modo, 'duo', `${cancion}: se puede elegir dueto`);
+    m.e.elegirModo(a, 'solo');
+  }
+  m.e.elegirModo(a, 'duo');
+  m.e.elegirCancion(a, 'b'); // cambiar de cancion no cambia la eleccion
+  assert.equal(m.e.yo(a).modo, 'duo');
+});
+
+test('dueto: llega a PLAYING en modo dueto (celu y mano) y se ve el compañero', () => {
+  const m = mundo();
+  const a = m.persona(1, 'Ana');
+  const c = m.persona(2, 'Compa');
+  m.e.entrarFila(a);
+  m.e.unirseCopiloto(c, m.e.yo(a).codigoCopiloto);
+  m.e.elegirCancion(a, 'a');
+  m.e.elegirModo(a, 'duo'); // dueto con una cancion comun (no marcada como dueto)
+  assert.equal(m.e.pantallaConfirmar({ cancionId: 'a' }).ok, true); // confirmada con la mano
+  assert.equal(m.e.snapshot().actual.modo, 'duo');
+  m.avanzar(m.e.config.COUNTDOWN_S * 1000);
+  assert.equal(m.e.etapa, ETAPAS.PLAYING);
+  assert.equal(m.e.snapshot().actual.modo, 'duo');
+  assert.equal(m.e.snapshot().actual.copiloto, 'Compa', 'la pantalla sabe quien es la VOZ 2');
+});
+
+test('dueto: el modo se puede cambiar en CALLING pero no una vez que arranco', () => {
+  const m = mundo();
+  const a = m.persona(1, 'A');
+  m.e.entrarFila(a);
+  assert.equal(m.e.etapa, ETAPAS.CALLING);
+  assert.equal(m.e.elegirModo(a, 'duo').ok, true);
+  assert.equal(m.e.snapshot().actual.modo, 'duo');
+  m.e.elegirCancion(a, 'a');
+  m.e.pantallaConfirmar({ cancionId: 'a' });
+  assert.equal(m.e.elegirModo(a, 'solo').ok, false, 'ya empezo');
+  assert.equal(m.e.elegirModo(a, 'trio').ok, false, 'modo invalido');
+});
+
+test('dueto: tras reiniciar el server el modo elegido se conserva', () => {
+  const m = mundo();
+  const b = m.persona(2, 'B');
+  m.e.entrarFila(b);
+  m.e.hola({ token: tk(7), nombre: 'Yaz', intencion: { enFila: true, cancionId: 'a', modo: 'duo' } });
+  assert.equal(m.e.yo(tk(7)).modo, 'duo');
 });

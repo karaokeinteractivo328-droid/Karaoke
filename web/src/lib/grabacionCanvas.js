@@ -44,7 +44,9 @@ export function crearGrabacionCanvas(video, { getLetra, titulo }) {
     // --- letra actual (palabras cantadas en rosa) ---
     const l = getLetra?.();
     if (l && l.texto) {
-      const palabras = l.texto.split(/\s+/).filter(Boolean);
+      // se dibuja en MAYUSCULAS: tambien hay que medir en mayusculas (antes se media en
+      // minusculas y las palabras salian encimadas)
+      const palabras = l.texto.toUpperCase().split(/\s+/).filter(Boolean);
       let size = 58;
       ctx.textBaseline = 'alphabetic';
       // achicar hasta que entre en 2 líneas
@@ -63,7 +65,7 @@ export function crearGrabacionCanvas(video, { getLetra, titulo }) {
         let x = (W - ancho) / 2;
         for (const p of linea) {
           ctx.fillStyle = idx < (l.hechas || 0) ? '#ec2f80' : '#ffffff';
-          ctx.fillText(p.toUpperCase(), x, y);
+          ctx.fillText(p, x, y);
           x += ctx.measureText(p + ' ').width;
           idx++;
         }

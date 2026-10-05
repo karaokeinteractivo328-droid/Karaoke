@@ -6,6 +6,7 @@ export function crearGrabacion() {
   let rec = null;
   let chunks = [];
   let blob = null;
+  let diag = { motivo: 'nunca se inicio' }; // por que no hay video (para el log de la pantalla)
 
   function mimeSoportado() {
     return (
@@ -16,7 +17,7 @@ export function crearGrabacion() {
   }
 
   function iniciar(videoStream, audioStream) {
-    if (!window.MediaRecorder) return;
+    if (!window.MediaRecorder) { diag = { motivo: 'este navegador no tiene MediaRecorder' }; return; }
     // una grabacion anterior que quedo colgada no puede bloquear la siguiente
     if (rec && rec.state === 'inactive') rec = null;
     if (rec) {
@@ -24,7 +25,7 @@ export function crearGrabacion() {
       rec = null;
     }
     const vt = videoStream?.getVideoTracks?.()[0];
-    if (!vt) return;
+    if (!vt) { diag = { motivo: 'el canvas no entrego pista de video' }; return; }
     const at = audioStream?.getAudioTracks?.() || [];
     const grab = new MediaStream([vt, ...at]);
 
@@ -35,10 +36,13 @@ export function crearGrabacion() {
       rec = new MediaRecorder(grab, mimeType ? { mimeType, videoBitsPerSecond: 2_500_000 } : undefined);
     } catch (err) {
       console.warn('[grabacion] MediaRecorder:', err.message);
+      diag = { motivo: 'MediaRecorder fallo: ' + err.message };
       return;
     }
     rec.ondataavailable = (e) => e.data && e.data.size && chunks.push(e.data);
+    rec.onerror = (e) => { diag = { motivo: 'error del grabador: ' + (e.error?.message || e.type) }; };
     rec.start(1000);
+    diag = { motivo: 'grabando', mime: rec.mimeType, audio: at.length > 0 };
   }
 
   function detener() {
@@ -68,5 +72,6 @@ export function crearGrabacion() {
     detener,
     get blob() { return blob; },
     get grabando() { return rec?.state === 'recording'; },
+    get diagnostico() { return { ...diag, trozos: chunks.length }; },
   };
 }

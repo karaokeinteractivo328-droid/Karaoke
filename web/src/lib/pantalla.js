@@ -118,10 +118,13 @@ audioBus.desbloquear();
 function frame() {
   fondo.latir(audioBus.tick());
   camara.dibujar(datosManos, seleccionActiva());
-  if (grabacion.grabando) recCanvas.dibujar();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+// El cuadro del VIDEO se dibuja con su propio reloj (~30 por segundo), no con el de la
+// pantalla: si el navegador frena requestAnimationFrame (ventana tapada, carga alta)
+// el video no se entrecorta con el.
+setInterval(() => { if (grabacion.grabando) recCanvas.dibujar(); }, 33);
 
 // --- Camara, microfono y deteccion (todo opcional: el show sigue sin ellos) ---
 let camaraOk = null; // null = todavia pidiendo permiso
@@ -257,6 +260,9 @@ socket.on('estado', (s) => {
   modoActual = s.actual?.modo || 'solo';
   body.dataset.estado = s.etapa;
   body.dataset.modo = modoActual;
+  // dueto: "VOZ 1 · IARA" / "VOZ 2 · ROCIO" (el compañero es quien entro como copiloto)
+  $('#lineaActual').dataset.n1 = s.actual?.nombre ? ` · ${s.actual.nombre}` : '';
+  $('#lineaActual').dataset.n2 = s.actual?.copiloto ? ` · ${s.actual.copiloto}` : '';
   if (s.reacciones) totales = s.reacciones;
 
   switch (s.etapa) {
@@ -311,8 +317,7 @@ function pintarLista() {
     ul.innerHTML = '';
     catalogoFull.forEach((c) => {
       const li = document.createElement('li');
-      const duo = c.voces === 'duo' ? ' <b class="tag-duo">dúo</b>' : '';
-      li.innerHTML = `${escapeHtml(c.titulo)} <span class="art">${escapeHtml(c.artista)}</span>${duo}<span class="prep" hidden>✓ PREPARADA</span>`;
+      li.innerHTML = `${escapeHtml(c.titulo)} <span class="art">${escapeHtml(c.artista)}</span><span class="prep" hidden>✓ PREPARADA</span>`;
       ul.appendChild(li);
     });
   }
@@ -345,8 +350,9 @@ function pintarCalling(s, cambio) {
   if (!a) return;
   $('#turnoNombre').textContent = a.nombre;
   const modo = $('#turnoModo');
-  modo.hidden = a.modo !== 'duo';
-  modo.textContent = 'dúo';
+  // siempre se ve como va a cantar: solo o a dueto (lo elige la persona en su celu)
+  modo.hidden = false;
+  modo.textContent = a.modo === 'duo' ? 'a dúo · voz 1 y voz 2' : 'solo';
   if (cambio) {
     confirmando = false;
     manoTocada = false;
@@ -625,10 +631,9 @@ function mostrarLinea(idx, forzar = false) {
   const cur = letras[i];
   const sig = [letras[i + 1], letras[i + 2]].find((l) => l?.texto)?.texto || '';
   elSig.textContent = sig;
-  if (!espejo) socket.emit('pantalla:letra', { actual: cur?.texto || '', siguiente: sig });
-
   // color por voz (modo dúo)
   const voz = voces[i] || 'p1';
+  if (!espejo) socket.emit('pantalla:letra', { actual: cur?.texto || '', siguiente: sig, voz: modoActual === 'duo' ? voz : null });
   elActual.dataset.voz = modoActual === 'duo' ? voz : '';
   elSig.dataset.voz = modoActual === 'duo' ? (voces[i + 1] || voz) : '';
 
@@ -868,9 +873,12 @@ async function mostrarResultado(s) {
 
   // cerrar la grabacion y subirla: el server la pasa a .mp4 con ffmpeg
   if (espejo) return;
+  const grabando = grabacion.grabando;
   const blob = await grabacion.detener();
   if (!blob || !blob.size || !token) {
-    console.warn('[video] no hay grabacion para subir (blob vacio o sin token)');
+    console.warn(`[video] no hay nada para subir: blob=${blob ? blob.size + 'B' : 'null'} (estaba grabando: ${grabando}) token=${token ? 'si' : 'NO'} diagnostico=${JSON.stringify(grabacion.diagnostico)}`);
+    // el celu no tiene que esperar para siempre un video que no va a llegar
+    if (token) socket.emit('pantalla:videoError', { token });
     return;
   }
   // la subida es lo mas fragil del video (archivo grande, wifi): se reintenta

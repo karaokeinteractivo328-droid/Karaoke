@@ -122,6 +122,23 @@ try {
   ok(r1.ok === false, 'sin token no se puede nada');
   sinToken.close();
 
+  // ---- acciones SIN callback (el boton de reacciones del celu no espera respuesta)
+  console.log('\n== A2. Acciones sin callback (reacciones del celu)');
+  const espia = cliente('celu', { token: tk(9), nombre: 'Espía' });
+  await espia.emitAck('hola', { token: tk(9), nombre: 'Espía' });
+  const fanA = cliente('celu', { token: tk(8), nombre: 'FanA' });
+  await fanA.emitAck('hola', { token: tk(8), nombre: 'FanA' });
+  let vista = null;
+  espia.on('reaccion', (r) => { vista = r; });
+  fanA.emit('reaccion', { tipo: 'corazon' }); // SIN callback, como el boton del celu
+  await hasta(() => vista, 1500, 'reaccion sin callback');
+  ok(vista?.tipo === 'corazon' && vista?.nombre === 'FanA', 'una reaccion mandada sin callback llega a todos (la pantalla las dibuja)');
+  fanA.emit('modo:elegir', { modo: 'duo' });
+  await espera(200);
+  ok(true, 'acciones sin callback no rompen al server');
+  fanA.close();
+  espia.close();
+
   // -------------------------------------------------------------------- B. QR
   console.log('\n== B. QR general vs QR del video');
   const qA = await (await fetch(`${BASE}/api/qr`)).json();
@@ -209,6 +226,13 @@ try {
   const buf = Buffer.from(await mp4.arrayBuffer());
   ok(mp4.status === 200 && /video\/mp4/.test(mp4.headers.get('content-type') || '') && buf.length > 10_000, `el mp4 se descarga (${(buf.length / 1000).toFixed(0)} KB, ${mp4.headers.get('content-type')})`);
   ok(buf.subarray(4, 8).toString() === 'ftyp', 'es un mp4 real (cabecera ftyp)');
+  // el mp4 tiene que ser reproducible en cualquier lado: cuadros constantes y rango de color estandar
+  const mp4Path = join(tmpdir(), `karaoke-test-${Date.now()}.mp4`);
+  await (await import('node:fs/promises')).writeFile(mp4Path, buf);
+  const info = await new Promise((res) => execFile(ffmpegPath, ['-hide_banner', '-i', mp4Path], (_e, _o, err) => res(err)));
+  ok(/30 fps/.test(info) && /yuv420p\(tv/.test(info), 'mp4 a 30 fps constantes y rango de color estandar (no 3,75 fps variables ni yuvj)');
+  ok(/Audio: aac/.test(info) && /Video: h264/.test(info), 'trae video h264 y audio aac');
+  await rm(mp4Path, { force: true });
   const pagListo = await (await fetch(`${BASE}/video/${tokA}`)).text();
   ok(pagListo.includes('Tu video está listo') && pagListo.includes(`/video/${tokA}.mp4`), 'la pagina muestra "Tu video está listo" con VER y DESCARGAR');
   await rm(webm, { force: true });
