@@ -241,6 +241,16 @@ test('letra: si no hay una compatible no se inventa (el video karaoke ya trae la
   await x.limpiar();
 });
 
+test('letra: el audio de YouTube figura "lista" recien cuando la letra de lrclib ya esta (la pantalla la necesita al precargar)', async () => {
+  const x = await armar({ lrclib: [{ id: 2, trackName: 'Bohemian Rhapsody', artistName: 'Queen', duration: 354, syncedLyrics: LRC, instrumental: false }] });
+  const m = await x.cat.resolver(`yt-${vid(8)}`);
+  await x.cat.asegurarAudio(m.id);
+  assert.equal(x.cat.estadoAudio(m.id).estado, 'lista');
+  assert.equal(x.cat.metaPublica(m.id).lrc, `/cache-audio/${m.id}.lrc`, 'la meta que baja la pantalla ya trae la letra');
+  assert.equal(x.llamadas.lrclib.length >= 1, true);
+  await x.limpiar();
+});
+
 test('meta publica: trae lo que la pantalla necesita (videoId, thumbnail, consulta, puntaje, estado del audio)', async () => {
   const x = await armar();
   await x.cat.resolver(`yt-${vid(7)}`, { busqueda: 'queen bohemian' });

@@ -50,6 +50,7 @@ export function crearCatalogo({
   const C = {
     POR_PAGINA_LOCAL: 12,
     TIMEOUT_LRCLIB_MS: 9_000,
+    ESPERA_LETRA_MS: 8_000, // cuanto se espera la letra antes de dar la cancion por lista
     TOLERANCIA_LETRA_S: 25,
     LRCLIB: process.env.LRCLIB_URL || LRCLIB_POR_DEFECTO,
     ...config,
@@ -139,7 +140,7 @@ export function crearCatalogo({
       };
       canciones.push(meta);
       log(`[SONG] registrada ${id}: "${meta.titulo}" (${meta.canal}, ${meta.duracion}s, karaoke ${meta.karaokeScore})`);
-      buscarLetra(meta).catch((e) => log(`[letra] ${id}: ${e.message}`)); // en segundo plano: no frena la eleccion
+      asegurarLetra(meta); // en segundo plano: no frena la eleccion
       return { ...meta };
     })().finally(() => registrando.delete(id));
     registrando.set(id, p);
@@ -161,23 +162,33 @@ export function crearCatalogo({
 
   // Letra sincronizada para el video elegido (mejor esfuerzo). Se acepta solo si la duracion de la
   // letra es parecida a la del video (si no, el tiempo no coincidiria y seria peor que no tener).
+  // Se prueba de lo mas preciso (artista + tema) a lo mas amplio; gana la de duracion mas cercana
+  // (y, a igualdad, la del mismo artista).
   async function buscarLetra(meta) {
     const { artista, tema } = separarArtistaTema(meta.titulo);
-    const q = `${artista} ${tema}`.trim();
-    if (q.length < 3) return null;
-    const crudo = await lrclib(`/search?q=${encodeURIComponent(q)}`);
+    if (`${artista} ${tema}`.trim().length < 3) return null;
+    const consultas = [];
+    if (artista && tema) consultas.push(`/search?track_name=${encodeURIComponent(tema)}&artist_name=${encodeURIComponent(artista)}`);
+    consultas.push(`/search?q=${encodeURIComponent(`${artista} ${tema}`.trim())}`);
+    if (artista) consultas.push(`/search?q=${encodeURIComponent(tema)}`);
     const nTema = normalizar(tema);
-    const candidatos = (Array.isArray(crudo) ? crudo : [])
-      .filter((r) => r.syncedLyrics && !r.instrumental && normalizar(r.trackName || r.name).includes(nTema.split(' ')[0] || nTema))
-      .map((r) => ({ r, dif: Math.abs(Number(r.duration) - Number(meta.duracion)) }))
-      .filter((x) => x.dif <= C.TOLERANCIA_LETRA_S)
-      .sort((a, b) => a.dif - b.dif);
-    if (!candidatos.length) {
+    const nArtista = normalizar(artista).split(' ')[0] || '';
+    let mejor = null;
+    for (const ruta of consultas) {
+      let crudo;
+      try { crudo = await lrclib(ruta); } catch (e) { log(`[letra] ${meta.id}: lrclib fallo (${e.message})`); continue; }
+      const candidatos = (Array.isArray(crudo) ? crudo : [])
+        .filter((r) => r.syncedLyrics && !r.instrumental && normalizar(r.trackName || r.name).includes(nTema.split(' ')[0] || nTema))
+        .map((r) => ({ r, dif: Math.abs(Number(r.duration) - Number(meta.duracion)), mismoArtista: !!nArtista && normalizar(r.artistName).includes(nArtista) }))
+        .filter((x) => x.dif <= C.TOLERANCIA_LETRA_S)
+        .sort((a, b) => a.dif - (a.mismoArtista ? 5 : 0) - (b.dif - (b.mismoArtista ? 5 : 0)));
+      if (candidatos.length) { mejor = candidatos[0]; break; }
+    }
+    if (!mejor) {
       meta.letraEstado = 'sin_letra';
       log(`[letra] ${meta.id}: sin letra sincronizada compatible (el video trae la suya)`);
       return null;
     }
-    const mejor = candidatos[0];
     await mkdir(dirCache, { recursive: true });
     await writeFile(join(dirCache, `${meta.id}.lrc`), mejor.r.syncedLyrics, 'utf8');
     meta.lrc = `/cache-audio/${meta.id}.lrc`;
@@ -185,6 +196,17 @@ export function crearCatalogo({
     meta.letraDesfase = Math.round(meta.duracion - mejor.r.duration);
     log(`[letra] ${meta.id}: letra sincronizada de lrclib (duracion ${mejor.r.duration}s vs video ${meta.duracion}s)`);
     return meta.lrc;
+  }
+
+  // Una sola busqueda de letra por cancion (la eleccion la dispara en segundo plano y la
+  // preparacion del audio la espera un rato: asi, cuando la cancion figura "lista", la letra ya esta).
+  const letrasEnCurso = new Map();
+  function asegurarLetra(meta) {
+    if (meta.lrc || meta.letraEstado) return Promise.resolve();
+    if (!letrasEnCurso.has(meta.id)) {
+      letrasEnCurso.set(meta.id, buscarLetra(meta).catch((e) => log(`[letra] ${meta.id}: ${e.message}`)));
+    }
+    return letrasEnCurso.get(meta.id);
   }
 
   // ---------------------------------------------------------- validar archivos locales
@@ -204,7 +226,11 @@ export function crearCatalogo({
     if (!meta) throw new Error('cancion desconocida');
     // YouTube: ya se verifico con la API (embebible / publico / sin restriccion). Que el
     // reproductor la cargue lo confirma la pantalla.
-    if (meta.origen === 'youtube') return;
+    if (meta.origen === 'youtube') {
+      // la letra sincronizada (lrclib) se espera un poco: asi la pantalla ya la tiene al precargar
+      await Promise.race([asegurarLetra(meta), new Promise((r) => setTimeout(r, C.ESPERA_LETRA_MS))]);
+      return;
+    }
     // biblioteca local: el archivo del repo, o el de Supabase Storage si no esta
     const rel = String(meta.audio || '');
     if (/^https?:\/\//.test(rel)) {

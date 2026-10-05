@@ -804,9 +804,10 @@ body[data-yt="grande"] #ytWrap {
 }
 /* la letra la dibujamos nosotros: el video queda como una ventana chica (>= 200x200 usable) */
 body[data-yt="chico"] #ytWrap {
-  left: auto;
+  /* a la izquierda: el QR "UNITE" vive abajo a la derecha */
+  left: 2vmin;
   top: auto;
-  right: 2vmin;
+  right: auto;
   bottom: 4vmin;
   width: max(26vw, 360px);
   height: auto;
