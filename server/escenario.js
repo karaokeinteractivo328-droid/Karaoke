@@ -48,6 +48,8 @@ export const CONFIG_BASE = Object.freeze({
   PARTICIPANTES_MAX: 500,
   REACC_MIN_MS: 250, // 4 por segundo por persona
   REACC_MAX_POR_PERSONA: 15, // reacciones que cuentan para el puntaje
+  RETO_PUNTOS: 10, // lo que vale cada reto cumplido
+  RETOS_MAX: 30, // tope de puntos de retos por performance
   CALLING_TIPICO_S: 10, // para estimar esperas
   DURACION_DEFAULT_S: 220,
 });
@@ -73,6 +75,7 @@ export function crearEscenario({
   onCambio,
   onResultado,
   onRonda, // arranca una performance: el server habilita la subida de ese video
+  onRetoResultado, // se resolvio el reto de la palabra (acierto, error o tiempo)
   ahora = () => Date.now(),
   config = {},
   log = () => {},
@@ -294,6 +297,8 @@ export function crearEscenario({
         reacciones: reaccionesVacias(),
         porPersona: new Map(),
         retosPuntos: 0,
+        retosHechos: new Map(), // idReto -> puntos (una sola recompensa por reto)
+        retoPalabra: null,
         resultado: null,
         resultadoHasta: null,
       };
@@ -398,7 +403,7 @@ export function crearEscenario({
     const r = actual.reacciones;
     const ponderadas = r.corazon * PESO.corazon + r.fuego * PESO.fuego + r.aplauso * PESO.aplauso;
     const cancion = Math.round(40 * prog);
-    const retos = Math.min(30, Math.round(actual.retosPuntos || 0));
+    const retos = Math.min(C.RETOS_MAX, Math.round(actual.retosPuntos || 0));
     const publico = Math.min(30, Math.round((30 * ponderadas) / 20));
     return {
       total: Math.min(100, cancion + retos + publico),
@@ -496,9 +501,28 @@ export function crearEscenario({
     }
   }
 
-  function pantallaRetos(puntos) {
-    if (!actual || etapa !== ETAPAS.PLAYING) return;
-    if (Number.isFinite(puntos)) actual.retosPuntos = Math.max(actual.retosPuntos, puntos);
+  // Los puntos de retos viven ACA (la pantalla puede recargarse y no se pierden):
+  // cada reto se registra por id, una sola vez, hasta RETO_PUNTOS cada uno y
+  // RETOS_MAX en total.
+  function sumarReto(idReto, tipo, puntos) {
+    if (!actual || etapa !== ETAPAS.PLAYING) return { ok: false, error: 'No se está cantando' };
+    const id = String(idReto || '').slice(0, 40);
+    if (!id) return { ok: false, error: 'Reto inválido' };
+    if (actual.retosHechos.has(id)) return { ok: true, repetido: true, total: actual.retosPuntos };
+    const p = Math.min(C.RETO_PUNTOS, Math.max(0, Math.round(Number(puntos) || 0)));
+    if (!p) return { ok: false, error: 'Puntos inválidos' };
+    const total = Math.min(C.RETOS_MAX, actual.retosPuntos + p);
+    actual.retosHechos.set(id, total - actual.retosPuntos);
+    actual.retosPuntos = total;
+    log(`[escenario] reto ${tipo || ''} cumplido: +${actual.retosHechos.get(id)} (retos ${total}/${C.RETOS_MAX})`);
+    marcar();
+    emitirSiCambio();
+    return { ok: true, total };
+  }
+
+  function pantallaRetoCumplido({ id, tipo, puntos } = {}) {
+    if (!id) return { ok: false, error: 'Reto inválido' };
+    return sumarReto(`g:${id}`, tipo, puntos ?? C.RETO_PUNTOS);
   }
 
   function pantallaFin({ progreso } = {}) {
@@ -526,6 +550,76 @@ export function crearEscenario({
     }
     marcar();
     emitirSiCambio();
+  }
+
+  // ----------------------------------------------------- reto de la palabra
+  // La pantalla tapa una palabra de la letra y manda las opciones + cual es la
+  // correcta. El server la guarda (nunca sale en el estado publico), recibe la
+  // respuesta del cantante / copiloto (celu) o de la pantalla (mano + pellizco),
+  // la compara y avisa el resultado a todos.
+  const normalizar = (w) => String(w || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9ñ]/g, '');
+
+  function pantallaRetoPalabra({ id, opciones, correcta, dur } = {}) {
+    if (!actual || etapa !== ETAPAS.PLAYING) return { ok: false, error: 'No se está cantando' };
+    if (actual.retoPalabra && !actual.retoPalabra.resuelto) return { ok: false, error: 'Ya hay un reto activo' };
+    if (!Array.isArray(opciones) || opciones.length < 2 || opciones.length > 4) return { ok: false, error: 'Opciones inválidas' };
+    const ops = opciones.map((o) => String(o || '').trim().slice(0, 24));
+    if (ops.some((o) => !o) || new Set(ops.map(normalizar)).size !== ops.length) return { ok: false, error: 'Opciones inválidas' };
+    const i = Number(correcta);
+    if (!Number.isInteger(i) || i < 0 || i >= ops.length) return { ok: false, error: 'Respuesta inválida' };
+    const ms = Math.min(15, Math.max(2, Number(dur) || 8)) * 1000;
+    actual.retoPalabra = {
+      id: String(id || aleatorio(6, ABC)).slice(0, 16),
+      opciones: ops,
+      correcta: i,
+      hasta: ahora() + ms,
+      resuelto: null,
+    };
+    marcar();
+    emitirSiCambio();
+    return { ok: true };
+  }
+
+  // ok=true si se registro la respuesta (no si acerto); `acierto` dice eso
+  function resolverReto(id, opcion, quien) {
+    const r = actual?.retoPalabra;
+    if (!r || etapa !== ETAPAS.PLAYING) return { ok: false, error: 'No hay ningún reto activo' };
+    if (r.id !== id) return { ok: false, error: 'Ese reto ya terminó' };
+    if (r.resuelto) return { ok: false, error: 'Ya se respondió' };
+    if (ahora() > r.hasta + 1500) return { ok: false, error: 'Se acabó el tiempo' };
+    const o = Number(opcion);
+    if (!Number.isInteger(o) || o < 0 || o >= r.opciones.length) return { ok: false, error: 'Opción inválida' };
+    return cerrarReto(r, { opcion: o, acierto: o === r.correcta, quien });
+  }
+
+  function cerrarReto(r, { opcion = null, acierto = false, timeout = false, quien = null }) {
+    r.resuelto = { opcion, acierto, timeout, quien };
+    log(`[escenario] reto palabra: ${timeout ? 'sin respuesta' : acierto ? 'acertó' : 'falló'} (${quien || 'tiempo'})`);
+    if (acierto) sumarReto(`p:${r.id}`, 'palabra', C.RETO_PUNTOS);
+    onRetoResultado && onRetoResultado({ id: r.id, acierto, timeout, opcion, correcta: r.correcta, palabra: r.opciones[r.correcta], quien, puntos: acierto ? C.RETO_PUNTOS : 0 });
+    marcar();
+    emitirSiCambio();
+    return { ok: true, acierto, palabra: r.opciones[r.correcta] };
+  }
+
+  function responderReto(token, { id, opcion } = {}) {
+    if (!actual) return { ok: false, error: 'No se está cantando' };
+    const p = participantes.get(token);
+    const cantante = participantes.get(actual.token);
+    const esCantante = actual.token === token;
+    const esCopiloto = !!p && !!cantante && cantante.copiloto === token;
+    if (!esCantante && !esCopiloto) return { ok: false, error: 'Solo responde quien canta o su copiloto' };
+    return resolverReto(id, opcion, esCantante ? 'cantante' : 'copiloto');
+  }
+
+  function pantallaRetoResponder({ id, opcion } = {}) {
+    return resolverReto(id, opcion, 'mano');
+  }
+
+  // la pantalla avisa que se acabo el tiempo (el tick tambien lo cierra solo)
+  function pantallaRetoFin({ id } = {}) {
+    const r = actual?.retoPalabra;
+    if (r && r.id === id && !r.resuelto) cerrarReto(r, { timeout: true });
   }
 
   // ------------------------------------------------------------- reacciones
@@ -635,6 +729,12 @@ export function crearEscenario({
     });
   }
 
+  function retoPublico() {
+    const r = actual?.retoPalabra;
+    if (!r || r.resuelto || etapa !== ETAPAS.PLAYING) return null;
+    return { id: r.id, opciones: r.opciones, hasta: r.hasta };
+  }
+
   function actualPublico() {
     if (!actual) return null;
     const p = participantes.get(actual.token);
@@ -650,6 +750,8 @@ export function crearEscenario({
       countdownHasta: actual.countdownHasta,
       cuenta: actual.cuenta,
       playingDesde: actual.playingDesde,
+      retoPalabra: retoPublico(),
+      retosPuntos: actual.retosPuntos,
       resultado: actual.resultado,
     };
   }
@@ -773,6 +875,8 @@ export function crearEscenario({
       }
 
       case ETAPAS.PLAYING: {
+        const rp = actual.retoPalabra;
+        if (rp && !rp.resuelto && t > rp.hasta + 1500) cerrarReto(rp, { timeout: true });
         const dur = duracionDe(actual.cancionId) * 1000;
         if (t - actual.playingDesde > dur + C.PLAYING_EXTRA_MS) {
           finalizar({ forzado: true, motivo: 'La canción no terminó a tiempo' });
@@ -811,7 +915,11 @@ export function crearEscenario({
     pantallaDesconectada,
     pantallaSalud,
     pantallaPresencia,
-    pantallaRetos,
+    pantallaRetoCumplido,
+    pantallaRetoPalabra,
+    pantallaRetoResponder,
+    pantallaRetoFin,
+    responderReto,
     pantallaConfirmar,
     pantallaFin,
     reinicioSeguro,

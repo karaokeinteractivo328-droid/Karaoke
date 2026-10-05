@@ -55,8 +55,16 @@ npm run dev
 
 `npm start` = build + todo en el :3000 (lo que usarías en el evento).
 
-Tests: `npm -w server test` (24 casos con reloj falso). Hay además un script de
-integración con sockets reales: `node server/test/integracion.mjs`.
+### Tests
+
+```bash
+npm -w server test                  # 36 casos con reloj falso: fila, escenario, retos, palabra
+npm -w web test                     # 52 casos: tracking, gestos, retos, reloj y letra
+npm -w server run test:integracion  # sockets REALES: reinicia el server, sube un video, etc.
+```
+
+La integración levanta el server en otro puerto, simula pantalla + celus, **lo reinicia
+de verdad** y convierte un video real a mp4 con ffmpeg.
 
 ### Modo kiosco (para que el audio suene solo, sin ningún click)
 
@@ -121,10 +129,19 @@ Se pide **Wake Lock** mientras espera (para que el celu no se bloquee) y, si se
 corta la conexión, vuelve solo: la identidad es un token en `localStorage`, así
 que cerrar el navegador o perder señal no hace perder el lugar.
 
+**La identidad viaja en el handshake de Socket.IO** (`auth`: token + nombre + lo que
+estaba haciendo), que se evalúa en *cada* reconexión. Así la conexión ya nace
+registrada: después de reiniciar el server, el primer toque en "Quiero cantar" o
+"Empezar" funciona (antes podía llegar antes que el `hola` y el server contestaba
+"Sin sesión").
+
 ### Puntaje (100 puntos, entendible)
 
-`Canción (0–40)` = 40 × lo que se cantó · `Retos (0–30)` = retos con manos (tope 30) ·
+`Canción (0–40)` = 40 × lo que se cantó · `Retos (0–30)` = 3 retos de 10 puntos ·
 `Público (0–30)` = ❤️×1 + 🔥×1,5 + 👏×1 (20 ponderadas = 30 puntos).
+
+Los puntos de retos **los lleva el server** (cada reto se registra por id, una sola vez,
+con tope de 30): si la pantalla se recarga a mitad de la canción no se pierden.
 
 Las reacciones las cuenta el **server** y solo valen durante `PLAYING`; cada persona
 cuenta hasta 15 y hay un límite de 4 por segundo, para que una sola no llene el
@@ -166,6 +183,19 @@ lleva un token de 32 caracteres que solo recibe la persona (en su celu y en el Q
 resultado). Solo se acepta una subida por performance, hasta 150 MB, y los videos se
 **borran a las 6 horas**.
 
+Cada video tiene su **estado** (`GET /api/video/<token>/estado`) y el celu lo consulta solo:
+
+| Estado | Qué ve la persona |
+|---|---|
+| `esperando` | 🎥 Procesando tu video… (la pantalla todavía lo está enviando) |
+| `procesando` | 🎥 Procesando tu video… (se está convirtiendo a mp4) |
+| `listo` | 🎥 Tu video está listo → **Ver / descargar** (y el celu vibra) |
+| `error` | no pudimos prepararlo (si la conversión falló pero el archivo llegó, se ve igual en webm) |
+| `desconocido` | el video ya no está (token inexistente o borrado) |
+
+La pantalla reintenta la subida y, si no hay caso, avisa al server (`pantalla:videoError`)
+para que el celu muestre un error claro en vez de esperar para siempre.
+
 ## Deploy online (Vercel + Render)
 
 El frontend y el backend se despliegan por separado porque el "cerebro" necesita
@@ -196,23 +226,91 @@ ver de un vistazo si el escenario está vivo).
 `CONFIG_BASE` en [server/escenario.js](server/escenario.js): tiempos de llamado,
 gracias por desconexión, duración del resultado, etc. Sirve para demos y tests.
 
-## Control por cámara
+## Control por cámara: tracking y gestos separados
 
-[web/src/lib/vision.js](web/src/lib/vision.js) corre sobre el video:
-- `HandLandmarker` (hasta **4 manos**: cantante + copiloto), con **filtro One Euro**
-  ([oneEuro.js](web/src/lib/oneEuro.js)) para que el esqueleto no tiemble.
-- `FaceDetector`: ¿hay una persona en cuadro? (alimenta el abandono).
+```
+vision.js  ──detecciones crudas──►  seguimiento.js  ──tracks estables──►  manos.js  ──gestos──►  retos.js / pantalla.js
+(MediaPipe)                         (TRACKING)                            (GESTOS)
+```
 
-[web/src/lib/manos.js](web/src/lib/manos.js) traduce los gestos: scroll y pellizco
-para elegir canción, **corazón** (dos manos) como efecto, y los datos para los retos.
-Con varias personas las manos se separan por mitad de cámara (izquierda/derecha):
-es una heurística por posición, no reconocimiento de personas.
+- [vision.js](web/src/lib/vision.js) **solo detecta**: `HandLandmarker` (hasta **4 manos**:
+  cantante + copiloto) y `FaceDetector` (hay una persona + dónde está la cara).
+- [seguimiento.js](web/src/lib/seguimiento.js) **solo sabe dónde están las manos**: les da un
+  `id` que persiste entre frames (por cercanía, no por la etiqueta Left/Right de
+  MediaPipe), un filtro One Euro **por mano**, descarta detecciones duplicadas, conserva
+  250 ms una mano que se pierde un frame y calcula izquierda/derecha con histéresis.
+- [manos.js](web/src/lib/manos.js) **solo interpreta**: mano arriba, saludo, corazón y
+  pellizco. Nunca decide con un frame suelto.
 
-### Retos con manos
+Qué corregía esto: antes el filtro se guardaba por *etiqueta* de mano y con dos manos
+MediaPipe suele repetir la etiqueta, así que las dos compartían filtro y se mezclaban.
 
-En `PLAYING` aparecen carteles ("manos arriba", "corazón", "puño", "paz"…) y si se
-cumplen suman puntos ([web/src/lib/retos.js](web/src/lib/retos.js)). También hay
-"palabra tapada" en la letra.
+| Gesto | Cómo se reconoce |
+|---|---|
+| **0 / 1 / 2 manos arriba** | el centro de la palma está **por encima del mentón** (o de la mitad del cuadro si no se ve la cara), con histéresis y 200 ms de estabilidad. Dos "manos" muy juntas son una sola mal detectada. Con copiloto (3+ manos) "dos" = una por lado |
+| **Saludo** | la mano **va y viene de lado a lado** (≥2 inversiones de dirección en ~1 s, aunque el movimiento sea chico). Una mano quieta o que solo se mueve de un lugar a otro no cuenta. Cooldown de 2,5 s |
+| **Corazón** | pulgares e índices de las dos manos juntos |
+| **Pellizco** | pulgar + índice; **sostenido** para confirmar (lista de canciones u opciones del reto) |
+
+Si la cámara anda pero MediaPipe no carga (antes era **silencioso** y los retos con manos
+simplemente no aparecían), ahora sale un chip 🖐️ y el escenario lo trata como cámara
+caída: se habilita el respaldo del celu y el reto de la palabra sigue funcionando.
+
+### Retos durante la canción
+
+[retos.js](web/src/lib/retos.js) arma, para cada performance, un **plan de 3 retos de 10
+puntos** (tope 30), atado a la canción:
+
+- Cada reto arranca en el **comienzo de una línea de letra**, en segundos de **audio** (el
+  mismo reloj que la letra: nada de temporizadores propios que se desfasen).
+- El cartel dice qué hacer, cuánto vale y cuánto tiempo queda. Mientras se sostiene el
+  gesto se llena una línea verde: la persona ve que la detecta.
+- Un gesto cuenta recién cuando se **sostiene** (≈0,4 s, con tolerancia al parpadeo). Una
+  vez cumplido, el reto termina: aunque mantengas las manos arriba 3 s, suma **una** vez.
+- Al cumplirse: **✓ ¡LO HICISTE! +10 PUNTOS**. Si se acaba el tiempo, termina sin puntos.
+- Sin cámara o sin tracking, los retos de gestos se saltean y la canción sigue.
+
+Gestos disponibles: ✋ una mano · 🙌 dos manos · 👋 saludo · 💖 corazón · ✊ puño alto ·
+✌️ paz · 👆 señalar al cielo.
+
+### Reto de la palabra
+
+Una palabra de la letra se tapa (▧▧▧) y aparecen **3 opciones** en pantalla (la correcta
+y dos palabras de la misma canción). Se contesta:
+
+- con la **mano**: moverla hasta la opción (izquierda / centro / derecha) y **pellizcar
+  sostenido** (la barra verde de la opción se llena), o
+- desde el **celu** del cantante o del copiloto, tocando la palabra (mientras dura el reto
+  el teleprompter se oculta para no regalar la respuesta).
+
+El server **guarda la respuesta correcta** (nunca viaja en el estado público), compara,
+suma los 10 puntos si acierta y avisa a todos (`reto:resultado`): la pantalla muestra
+*✓ ¡Era «noche»! +10* o *✗ Era «noche»* y revela la palabra en la letra. Cerrar el puño
+**no** responde nada.
+
+### Letra sincronizada con el audio
+
+[reloj.js](web/src/lib/reloj.js) es la única fuente de verdad para la letra, los retos, la
+barra de progreso y el fin. Antes la letra usaba un reloj propio desde que arrancaba
+PLAYING y *saltaba* al audio cuando este empezaba a sonar (si tardaba en cargar, salía
+adelantada y daba un salto; lo mismo en cada pausa o buffering).
+
+- Mientras el audio no suena, el tiempo **no avanza**; cuando suena, el tiempo **es**
+  `audio.currentTime` (interpolado entre actualizaciones).
+- El audio y la letra se **precargan durante el 3-2-1**.
+- `tiempo de letra = audio − offsetLetra − latencia de salida + 0,1 s` (la letra se lee un
+  instante antes de cantarse).
+- Los tiempos de cada palabra tienen tope: un instrumental largo no estira las últimas
+  palabras de una línea.
+- Ajuste en vivo con **`[` y `]`** (0,2 s por toque): queda **guardado por canción** en esa
+  pantalla y se escribe en la consola para pegarlo en `"offsetLetra"` de `canciones.json`.
+
+## El QR de la sala
+
+El **QR general** (entrar a la sala) está **siempre en la pantalla**: grande en STANDBY y
+chico y discreto (abajo a la derecha, "UNITE") durante el resto, incluso mientras alguien
+canta. Es estable (`<front>/sala`, sin código, no cambia al reiniciar). **No** es el QR del
+video: ese solo aparece en el resultado y lleva el token privado de esa performance.
 
 ## Estética / archivos del look
 

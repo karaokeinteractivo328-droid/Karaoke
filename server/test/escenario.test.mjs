@@ -248,12 +248,13 @@ test('reacciones: cuentan solo en PLAYING, tope por persona, rate limit, y suman
   assert.equal(contadas, m.e.config.REACC_MAX_POR_PERSONA, 'tope por persona');
   assert.equal(m.e.reaccionar(f, 'fuego').limitada, true, 'rate limit: sin esperar no pasa');
   assert.equal(m.e.reaccionar(a, 'corazon').contada, false, 'el cantante no se cuenta a si mismo');
-  m.e.pantallaRetos(18);
+  m.e.pantallaRetoCumplido({ id: 'r1', tipo: 'saludo' });
+  m.e.pantallaRetoCumplido({ id: 'r2', tipo: 'una' });
   const r = m.e.pantallaFin({ progreso: 1 });
   assert.equal(r.desglose.cancion, 40);
-  assert.equal(r.desglose.retos, 18);
+  assert.equal(r.desglose.retos, 20);
   assert.equal(r.desglose.publico, 30, '15 fuegos * 1.5 = 22.5 ponderadas >= 20 -> tope 30');
-  assert.equal(r.total, 88);
+  assert.equal(r.total, 90);
   assert.equal(r.reacciones.fuego, 15);
 });
 

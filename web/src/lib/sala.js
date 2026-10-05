@@ -41,11 +41,14 @@ const REACC = [
 ];
 
 // ------------------------------------------------------------------- socket
-const socket = conectar('celu');
-
 function intencion() {
   try { return JSON.parse(leer('karaoke:intencion') || 'null') || undefined; } catch { return undefined; }
 }
+
+// El celu se presenta en el handshake (token + nombre + lo que estaba haciendo):
+// despues de un corte o un reinicio del server la conexion ya nace registrada y
+// cualquier boton funciona desde el primer toque.
+const socket = conectar('celu', {}, (cb) => cb({ token, nombre, intencion: intencion() }));
 
 function saludar() {
   socket.emit('hola', { token, nombre, intencion: intencion() }, (r) => {
@@ -71,6 +74,19 @@ socket.on('yo', (m) => {
 });
 socket.on('reaccion', (r) => {
   if (r?.totales) { totales = { ...totales, ...r.totales }; pintarContadores(); }
+});
+// el server compara la respuesta del reto de la palabra y avisa a todos
+let retoResultado = null; // { ok, texto, hasta }
+socket.on('reto:resultado', (r) => {
+  const puede = yo?.estado === 'SINGING' || yo?.copilotoDe?.estado === 'SINGING';
+  if (!puede) return;
+  retoResultado = r.timeout
+    ? { ok: false, texto: `⌛ Se acabó el tiempo · era «${r.palabra}»`, hasta: Date.now() + 3500 }
+    : r.acierto
+      ? { ok: true, texto: `✓ ¡Era «${r.palabra}»! +${r.puntos || 10} puntos`, hasta: Date.now() + 3500 }
+      : { ok: false, texto: `✗ Era «${r.palabra}»`, hasta: Date.now() + 3500 };
+  if (r.acierto) vibrar([60, 40, 60]);
+  renderReto();
 });
 socket.on('letra', (l) => {
   letra = l || { actual: '', siguiente: '' };
@@ -156,6 +172,7 @@ function render() {
   renderResultado();
   renderCopiloto();
   renderSelectores();
+  renderReto();
   pintarContadores();
   pintarLetra();
   pantallaEncendida(['vFila', 'vTurno', 'vCuenta', 'vCantando', 'vCopiloto'].includes(vista));
@@ -295,16 +312,61 @@ function renderResultado() {
   $('resDesglose').textContent = `Canción ${d.cancion ?? 0} · Retos ${d.retos ?? 0} · Público ${d.publico ?? 0}`;
   const x = r.reacciones || {};
   $('resReacc').textContent = `❤️ ${x.corazon || 0}   🔥 ${x.fuego || 0}   👏 ${x.aplauso || 0}`;
+  pintarVideo();
+}
+
+// El video de cada performance tiene su propio token y su propio estado en el
+// server: esperando -> procesando -> listo (o error). El celu lo consulta solo
+// y avisa cuando esta listo, sin que la persona tenga que recargar nada.
+let video = { token: '', estado: 'esperando' };
+
+function pintarVideo() {
   const link = $('resVideo');
-  if (yo.videoToken) {
-    link.href = `${SOCKET_URL}/video/${yo.videoToken}`;
-    link.hidden = false;
-    $('resVideoEstado').textContent = 'Es privado: solo lo ves con este link. Si todavía se está preparando, la página se actualiza sola. Se borra en 6 horas.';
-  } else {
+  const txt = $('resVideoEstado');
+  if (!yo?.videoToken) {
     link.hidden = true;
-    $('resVideoEstado').textContent = 'Esta vez no hay video.';
+    txt.textContent = 'Esta vez no hay video.';
+    return;
+  }
+  link.href = `${SOCKET_URL}/video/${yo.videoToken}`;
+  const e = video.token === yo.videoToken ? video.estado : 'esperando';
+  $('resVideoTitulo').textContent =
+    e === 'listo' ? '🎥 Tu video está listo' : e === 'error' || e === 'desconocido' ? '🎥 Tu video' : '🎥 Procesando tu video…';
+  link.hidden = !(e === 'listo' || e === 'error');
+  link.textContent = e === 'listo' ? '▶ Ver / descargar' : 'Probar abrir mi video';
+  txt.textContent =
+    e === 'listo'
+      ? 'Es privado: solo lo ves con este link. Se borra en 6 horas.'
+      : e === 'error'
+        ? 'No pudimos prepararlo del todo. Tocá el botón por si se puede ver igual.'
+        : e === 'desconocido'
+          ? 'El video ya no está.'
+          : 'Puede tardar un minuto. Te avisamos acá apenas esté listo.';
+}
+
+let consultando = false;
+async function consultarVideo() {
+  const token = yo?.videoToken;
+  if (!token || consultando || (video.token === token && (video.estado === 'listo' || video.estado === 'desconocido'))) return;
+  consultando = true;
+  try {
+    const r = await fetch(`${SOCKET_URL}/api/video/${token}/estado`);
+    const j = await r.json();
+    if (token !== yo?.videoToken) return;
+    const previo = video.token === token ? video.estado : '';
+    video = { token, estado: j.estado };
+    if (j.estado === 'listo' && previo !== 'listo') {
+      vibrar([80, 50, 80]);
+      mostrarAviso('🎥 ¡Tu video está listo!', 6000);
+    }
+    pintarVideo();
+  } catch {
+    /* sin red: se reintenta en el proximo ciclo */
+  } finally {
+    consultando = false;
   }
 }
+setInterval(() => { if (vistaPrevia === 'vResultado') consultarVideo(); }, 3000);
 
 // --------------------------------------------------------------- COPILOTO
 function renderCopiloto() {
@@ -314,6 +376,50 @@ function renderCopiloto() {
   $('copiEstado').textContent =
     e === 'SINGING' ? 'Está cantando: acompañalo con la letra.' : e === 'QUEUED' ? 'Todavía está en la fila.' : 'Esperando su turno…';
 }
+
+// ----------------------------------------------- reto de la palabra (celu)
+// El cantante y el copiloto contestan tocando una opcion. Mientras dura el reto
+// se oculta el teleprompter: mostraria justo la palabra que hay que adivinar.
+let retoPintado = '';
+function renderReto() {
+  const reto = est?.actual?.retoPalabra || null;
+  const puede = !!yo && (yo.estado === 'SINGING' || yo.copilotoDe?.estado === 'SINGING');
+  const mostrar = !!reto && puede;
+  if (retoResultado && Date.now() > retoResultado.hasta) retoResultado = null;
+  for (const box of document.querySelectorAll('[data-reto]')) {
+    box.hidden = !mostrar;
+    if (!mostrar) continue;
+    const opc = box.querySelector('.retoOpc');
+    if (opc.dataset.id !== reto.id) {
+      opc.dataset.id = reto.id;
+      opc.textContent = '';
+      reto.opciones.forEach((o, i) => {
+        const b = document.createElement('button');
+        b.textContent = o;
+        b.addEventListener('click', () => {
+          for (const x of document.querySelectorAll('.retoOpc button')) x.disabled = true;
+          document.querySelectorAll('.retoOpc').forEach((c) => c.children[i]?.classList.add('elegida'));
+          vibrar(15);
+          enviar('reto:responder', { id: reto.id, opcion: i }, () => {
+            for (const x of document.querySelectorAll('.retoOpc button')) { x.disabled = false; x.classList.remove('elegida'); }
+          });
+        });
+        opc.append(b);
+      });
+    }
+  }
+  for (const t of document.querySelectorAll('[data-teleprompter]')) t.hidden = mostrar;
+  for (const r of document.querySelectorAll('[data-reto-res]')) {
+    r.hidden = !retoResultado || mostrar;
+    if (retoResultado) {
+      r.textContent = retoResultado.texto;
+      r.className = `retoRes ${retoResultado.ok ? 'ok' : 'fallo'}`;
+    }
+  }
+  const k = `${reto?.id || ''}|${retoResultado?.texto || ''}`;
+  if (k !== retoPintado) retoPintado = k;
+}
+setInterval(() => { if (retoResultado) renderReto(); }, 500);
 
 // ------------------------------------------------------ selector de canciones
 let firmaSelector = '';

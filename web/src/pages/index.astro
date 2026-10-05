@@ -21,6 +21,7 @@ import Base from '../layouts/Base.astro';
   <!-- salud de la instalación: solo aparece si algo falla -->
   <div id="chips">
     <span class="chip" id="chipCamara" hidden>📷 sin cámara</span>
+    <span class="chip" id="chipManos" hidden>🖐️ sin detección de manos (retos con gestos desactivados)</span>
     <span class="chip" id="chipMic" hidden>🎙️ sin micrófono</span>
     <button class="chip" id="chipAudio" hidden>🔇 tocá la pantalla para activar el sonido</button>
     <span class="chip" id="chipEspejo" hidden>🪞 pantalla espejo (otra pantalla tiene el control)</span>
@@ -28,6 +29,8 @@ import Base from '../layouts/Base.astro';
   </div>
 
   <div id="feedbackFlash"></div>
+  <!-- "✓ ¡LO HICISTE! +10 PUNTOS": por que se ganó el punto -->
+  <div id="retoFeedback" hidden><b id="retoFeedbackTitulo"></b><span id="retoFeedbackPuntos"></span></div>
   <div id="reacciones-vuelan"></div>
 
   <!-- quién canta ahora + reacciones (solo durante la performance) -->
@@ -39,6 +42,13 @@ import Base from '../layouts/Base.astro';
     <b id="siguienteNombre"></b>
     <small id="siguienteMas"></small>
   </div>
+
+  <!-- QR GENERAL de la sala: siempre a la vista (menos en STANDBY, donde ya es grande).
+       No es el QR del video de cada persona (ese solo aparece en RESULT). -->
+  <aside id="qrFijo" aria-label="QR para sumarte a la sala">
+    <img id="qrFijoImg" alt="QR para sumarte" />
+    <span>UNITE</span>
+  </aside>
 
   <!-- STANDBY: nadie cantando ni esperando -->
   <section class="ui" data-estado="STANDBY">
@@ -77,9 +87,15 @@ import Base from '../layouts/Base.astro';
       <p id="lineaSiguiente"></p>
     </div>
     <div id="reto" hidden>
-      <span id="retoIcono"></span>
-      <span id="retoTexto"></span>
+      <div class="reto-fila">
+        <span id="retoIcono"></span>
+        <span id="retoTexto"></span>
+        <b id="retoPuntos"></b>
+      </div>
+      <div id="retoOpciones" hidden></div>
+      <p id="retoAyuda" hidden></p>
       <span class="reto-barra"></span>
+      <span class="reto-sostener"></span>
     </div>
   </section>
   <div id="progreso" hidden><span></span></div>

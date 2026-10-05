@@ -1,11 +1,13 @@
-// Reconocimiento de la cámara con MediaPipe Tasks Vision (Google).
-//   - HandLandmarker : manos (gestos) — con filtro One Euro para que no tiemble
-//   - FaceDetector   : "hay una persona" (volver al inicio si se va)
+// DETECCION de la camara con MediaPipe Tasks Vision (Google). Solo detecta:
+//   - HandLandmarker : landmarks de las manos (crudos, sin identidad)
+//   - FaceDetector   : "hay una persona" + donde esta la cara (referencia de
+//                      "mano arriba": por encima del mentón)
+// La identidad, el suavizado y la estabilidad viven en seguimiento.js (TRACKING)
+// y la interpretacion en manos.js (GESTOS). Aca no se decide nada de eso.
 //
 // Assets desde /mediapipe/wasm, /models (web/scripts/preparar-mediapipe.mjs).
 
 import { FilesetResolver, HandLandmarker, FaceDetector } from '@mediapipe/tasks-vision';
-import { crearFiltroMano } from './oneEuro.js';
 
 const WASM = '/mediapipe/wasm';
 const MODELO_MANOS = '/models/hand_landmarker.task';
@@ -18,9 +20,9 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
     baseOptions: { modelAssetPath: MODELO_MANOS },
     runningMode: 'VIDEO',
     numHands: numManos,
-    minHandDetectionConfidence: 0.45,
-    minHandPresenceConfidence: 0.45,
-    minTrackingConfidence: 0.45,
+    minHandDetectionConfidence: 0.5,
+    minHandPresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
   });
 
   let faceDetector = null;
@@ -36,10 +38,11 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
 
   await esperarVideo(video);
 
-  const filtros = new Map(); // lado -> filtro One Euro
   let ultimoT = -1;
   let corriendo = true;
   let hayPersona = false;
+  let cara = null; // { cx, cy, w, h } normalizada y espejada
+  let caraVistaT = 0;
   let proximaCara = 0;
 
   function loop() {
@@ -60,13 +63,29 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
         try {
           const f = faceDetector.detectForVideo(video, ts);
           hayPersona = (f?.detections?.length || 0) > 0;
+          const bb = f?.detections?.[0]?.boundingBox;
+          if (bb && video.videoWidth) {
+            cara = {
+              cx: 1 - (bb.originX + bb.width / 2) / video.videoWidth,
+              cy: (bb.originY + bb.height / 2) / video.videoHeight,
+              w: bb.width / video.videoWidth,
+              h: bb.height / video.videoHeight,
+            };
+            caraVistaT = ts;
+          }
         } catch {
           /* frames sueltos */
         }
       }
 
-      const manos = normalizar(manosRes, filtros, ts);
-      onResultado({ manos, hayPersona: hayPersona || manos.length > 0 });
+      const detecciones = crudas(manosRes);
+      // la cara se recuerda 1.5 s: la deteccion es a ~3 fps y puede fallar un tick
+      onResultado({
+        detecciones,
+        hayPersona: hayPersona || detecciones.length > 0,
+        cara: ts - caraVistaT < 1500 ? cara : null,
+        ts,
+      });
     }
     requestAnimationFrame(loop);
   }
@@ -96,15 +115,15 @@ async function crearCon(Clase, fileset, opciones) {
   }
 }
 
-// 21 puntos por mano, normalizados 0..1, ESPEJADOS en x, y SUAVIZADOS (One Euro).
-function normalizar(res, filtros, ts) {
+// 21 puntos por mano, normalizados 0..1 y ESPEJADOS en x (como se ve en pantalla).
+// La etiqueta Left/Right de MediaPipe NO se usa: con la imagen sin espejar queda
+// invertida y con dos manos suele repetirse. El lado se deduce de la posicion.
+function crudas(res) {
   const lms = res?.landmarks || [];
-  return lms.map((pts, i) => {
-    const lado = res.handednesses?.[i]?.[0]?.categoryName || String(i);
-    if (!filtros.has(lado)) filtros.set(lado, crearFiltroMano());
-    const crudos = pts.map((p) => ({ x: 1 - p.x, y: p.y, z: p.z }));
-    return { puntos: filtros.get(lado)(crudos, ts), lado };
-  });
+  return lms.map((pts, i) => ({
+    puntos: pts.map((p) => ({ x: 1 - p.x, y: p.y, z: p.z })),
+    puntaje: res.handednesses?.[i]?.[0]?.score ?? 0,
+  }));
 }
 
 function esperarVideo(video) {
