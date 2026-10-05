@@ -60,16 +60,16 @@ npm run dev
 ### Tests
 
 ```bash
-npm -w server test                  # 73 casos con reloj falso: fila, audio, catálogo, retos, palabra
-npm -w web test                     # 74 casos: tracking, gestos, retos, reloj, precarga y buscador
+npm -w server test                  # 100 casos con reloj falso: fila, audio, catálogo, retos, palabra
+npm -w web test                     # 89 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
 npm -w server run test:integracion  # sockets REALES (3 suites, ver abajo)
 ```
 
 Las integraciones levantan el server en otro puerto, simulan pantalla + celus y **lo
 reinician de verdad**: convierten un video real a mp4 con ffmpeg (`integracion2`) y prueban
-el catálogo, el audio y la búsqueda **sin Internet** con un lrclib y un yt-dlp simulados
-(`integracion3`: errores, reintentos, fuente rota, silencio, reinicio con una canción online
-en la fila).
+la búsqueda y la elección de canciones **sin Internet** con una YouTube Data API y un lrclib
+simulados (`integracion3`: filtro karaoke, no embebibles, paginación, cuota, clave inválida,
+reinicio con una canción de YouTube en la fila).
 
 ### Modo kiosco (para que el audio suene solo, sin ningún click)
 
@@ -105,62 +105,69 @@ no existe "esperar para siempre".
 → `CALLED` (le toca) → `SINGING` → `DONE` (ve su puntaje y su video) → de nuevo `PUBLIC`.
 El **copiloto** es un rol, no un estado.
 
-### Canciones: búsqueda, audio y precarga
+### Canciones: YouTube (búsqueda + reproductor embebido)
 
-**Se elige solo desde el celu** (🎵 ¿qué querés cantar?): buscador por artista o título, con
-*debounce* de 350 ms (no se le pega a la API por tecla), resultados que se cancelan si
-seguís escribiendo, estados de carga / vacío / error con **Reintentar**, y scroll infinito.
+**Se elige solo desde el celu** (🎵 ¿qué querés cantar?): buscador con *debounce* de 350 ms,
+resultados que se cancelan si seguís escribiendo, tarjetas con **miniatura, título, canal,
+duración, insignia KARAOKE y botón ELEGIR**, estados de carga / vacío / error con
+**Reintentar**, y paginación con el `nextPageToken` de YouTube (scroll infinito).
 
-**De dónde sale cada cosa (arquitectura híbrida)** — [server/catalogo.js](server/catalogo.js):
+**La única fuente de canciones es la YouTube Data API v3** — [server/youtube.js](server/youtube.js):
 
-| Pieza | Proveedor | Por qué |
-|---|---|---|
-| Buscar canciones + letra sincronizada | **lrclib.net** | gratis, sin clave, CORS abierto, 20 resultados por búsqueda con letra `.lrc` y duración |
-| Audio de la biblioteca | **local** (`server/canciones`, o Supabase Storage en línea) | siempre anda, sin Internet |
-| Audio de cualquier otra canción | **resolvedor a pedido en el server** (`yt-dlp`) | busca la versión cuya **duración coincide con la letra**, la baja entera, la valida y la sirve desde nuestro propio server (mismo CORS, `Range`, `currentTime` exacto) |
+| Pieza | Qué hace |
+|---|---|
+| `search.list` | `type=video`, `videoEmbeddable=true`, `videoSyndicated=true`, `regionCode=AR` (100 unidades de cuota por búsqueda) |
+| `videos.list` | duración real y verificación: se descartan los videos **no embebibles, privados, en vivo, con restricción de edad o de región** (1 unidad) |
+| Reproducción | **solo el reproductor oficial embebido** (IFrame API) en la pantalla grande. **No se descarga ni se extrae audio ni video de YouTube.** La canción es un `videoId` |
+| Letra | si el video de karaoke ya trae la letra (lo normal) se ve grande; si además lrclib tiene letra sincronizada compatible (opcional) se dibuja la nuestra y el video queda chico en una esquina |
+| Biblioteca local | las canciones de `server/canciones` siguen sonando **sin Internet ni clave** |
 
-Descartados: *Spotify* (no entrega audio crudo, exige Premium), *Deezer / iTunes* (solo
-previews de 30 s), *Jamendo* (canciones completas pero solo música independiente),
-*YouTube IFrame* (sin control de preload ni de sincronización, con anuncios).
-⚠️ Bajar audio con `yt-dlp` va contra los términos de YouTube: es una decisión del proyecto
-(ya se usaba para armar la biblioteca) y se puede apagar con `AUDIO_REMOTO=0`. **Sin
-`yt-dlp` en el equipo solo se ofrece la biblioteca local** (nunca metadata sin audio):
-`/healthz` dice si el resolvedor está disponible.
+**Filtro karaoke** — [server/karaoke.js](server/karaoke.js): no es una sola consulta. Se arma un
+plan (`"<texto> karaoke"`, `"<texto> instrumental"`, `"<texto> sing along / backing track"`…),
+se corre lo mínimo para tener suficientes aptos, se junta, se deduplica y se **puntúa** cada
+video con tablas de reglas fáciles de editar (`A_FAVOR`, `EN_CONTRA`, `CANALES_KARAOKE`,
+`UMBRAL`): suman karaoke / instrumental / sing along / backing track / vocal removal / minus
+one / karaoke version / lyrics; restan official music video / live / concert / reaction / cover /
+remix / full album **salvo que el título ya diga karaoke**. También cuentan la relevancia
+contra lo que escribiste y que la duración sea plausible. No es estricto: solo se excluye lo
+claramente inservible y **nunca se devuelve una lista vacía si YouTube devolvió algo** (se
+muestran los mejores candidatos, los karaoke primero).
 
-**Preparación ANTES del turno.** Apenas elegís una canción: el server la registra y empieza
-a prepararla (descarga + validación con ffmpeg: decodifica, dura lo que debe, **no es
-silencio**), y la pantalla —la que suena— **precarga la del que está en el escenario y la
-del que sigue**: la baja entera a memoria, la decodifica en un `<audio>` aparte, comprueba
-la duración y prueba `play()`. Si cambiás de canción mientras esperás, la descarga vieja se
-cancela y arranca la nueva. Cuando te toca, el audio ya está en memoria: sin red.
+**Qué se guarda al elegir**: `videoId`, título, canal, miniatura, duración, `searchQuery`
+(con qué se lo encontró) y `karaokeScore` (+ `origen`, `esKaraoke`).
+
+**Cuota y clave.** Hace falta `YOUTUBE_API_KEY` (variable de entorno del server, **nunca en el
+repo ni en un chat**). Cuota gratuita: 10.000 unidades/día ≈ 100 búsquedas nuevas; el server corta en
+9.500, cachea 6 h, junta pedidos iguales y limita por IP. Si se agota o la clave es inválida, el
+celu muestra un mensaje claro y **la biblioteca local sigue disponible**.
+
+**Preparación ANTES del turno.** Apenas elegís una canción el server la **verifica con la API**
+y la pantalla —que es la que suena— carga el reproductor de YouTube. "Lista" = verificada por
+el server + reproductor cargado en esa pantalla. Durante la **cuenta regresiva 3-2-1** el
+video se carga **en silencio** y queda en pausa en 0:00, así que al empezar solo se da play.
 
 | Estado que ve el celu | Significa |
 |---|---|
-| ⏳ Preparando el audio… | se está bajando / validando / cargando en la pantalla |
-| ✅ Audio listo | existe + cargó + se decodifica + `play()` funciona + hay sonido habilitado |
+| ⏳ Preparando el audio… | se está verificando / cargando el reproductor en la pantalla |
+| ✅ Audio listo | verificada + reproductor cargado + sonido habilitado |
 | 🔇 Falta activar el sonido | el navegador de la pantalla tiene el audio bloqueado |
-| ⚠️ No se pudo preparar el audio | con el motivo; botones **Reintentar** y **Elegir otra canción** |
+| ⚠️ No se pudo preparar el audio | con el motivo (p. ej. *"el dueño no permite reproducirlo fuera de YouTube"*); **Reintentar** / **Elegir otra canción** |
 
-`LISTO` está **deshabilitado** hasta que el audio esté realmente listo y el server lo rechaza
-igual si se intenta. Si no se prepara a tiempo (`AUDIO_ESPERA_MS`) el turno se libera y pasa
-el siguiente; si el audio falla en plena canción (`play()` rechazado, error del `<audio>`,
-sin señal en la salida) la performance se cierra con el motivo en vez de cantar en silencio.
+`LISTO` está **deshabilitado** hasta que todo esté listo y el server lo rechaza igual. Si el
+reproductor falla en plena canción (códigos 2/5/100/101/150, autoplay bloqueado) la
+performance se cierra con el motivo en vez de cantar en silencio.
 
-**Sonido en la instalación física.** El navegador exige un toque para habilitar el audio. Si
-no está habilitado, la pantalla muestra un cartel enorme **"🔊 Tocá la pantalla para activar el
-sonido"** y el escenario no arranca hasta que se toca (o se abre Chrome en modo kiosco, ver
-abajo). Además, durante la canción se mide la **señal real en el grafo de audio**: si el
-audio avanza pero no hay señal, se intenta destrabar y, si sigue mudo, se corta con el motivo.
-Lo que ningún navegador puede ver es hacia qué **parlante** manda el sistema operativo ese
-sonido: eso se elige en el volumen del sistema (ver la prueba manual).
+**Sonido en la instalación física.** El navegador exige un toque para habilitar el audio (o
+Chrome en modo kiosco, ver abajo): hasta entonces la pantalla muestra **"🔊 Tocá la pantalla
+para activar el sonido"**. Con YouTube el sonido sale del iframe y **no pasa por el Web Audio
+API**: no se puede medir la señal (sí que esté reproduciendo, con volumen y sin silencio).
+⚠️ Por lo mismo, **el video grabado (mp4) lleva cámara + letra + tu voz, pero no la música de YouTube**.
 
-**Diagnóstico.** Todo el recorrido deja líneas `[SONG]` / `[AUDIO]` / `[AUDIO ERROR]` en la
-consola de la pantalla (`window.__karaoke.diagnostico()` las devuelve). Los errores nunca
-se esconden.
+**Diagnóstico.** `[SONG]` / `[AUDIO]` / `[AUDIO ERROR]` en la consola de la pantalla
+(`window.__karaoke.diagnostico()`).
 
-Variables del server: `AUDIO_REMOTO=0` (apaga el resolvedor), `YTDLP` (comando, si no es
-`yt-dlp`), `LRCLIB_URL`, `CACHE_AUDIO_DIR` (por defecto `server/cache-audio`, se limpia solo:
-máx. 40 canciones, nunca las que están en la fila).
+Variables del server: `YOUTUBE_API_KEY`, `YOUTUBE_API_BASE` (solo para pruebas), `LRCLIB_URL`,
+`CACHE_AUDIO_DIR` (solo guarda letras `.lrc`).
 
 ### El celular (`/sala`, una página, una vista por rol)
 

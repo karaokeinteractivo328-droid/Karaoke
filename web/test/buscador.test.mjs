@@ -9,18 +9,18 @@ function item(i) {
   return { id: `x${i}`, titulo: `Tema ${i}`, artista: 'A', duracion: 200, fuente: 'lrclib', lista: false };
 }
 
-// API simulada: `respuestas` es una funcion (q, pagina) => objeto | Error
+// API simulada: `respuestas` es una funcion (q, pageToken) => objeto | Error
 function armar(respuestas, { debounceMs = 15 } = {}) {
   const pedidos = [];
   const cambios = [];
   const fetchFn = async (url, { signal } = {}) => {
     const u = new URL(url, 'http://x');
     const q = u.searchParams.get('q');
-    const pagina = Number(u.searchParams.get('pagina'));
-    pedidos.push({ q, pagina });
+    const pageToken = u.searchParams.get('pageToken');
+    pedidos.push({ q, pageToken });
     await espera(5);
     if (signal?.aborted) throw Object.assign(new Error('abortado'), { name: 'AbortError' });
-    const r = respuestas(q, pagina);
+    const r = respuestas(q, pageToken);
     if (r instanceof Error) throw r;
     if (r.status) return { ok: false, status: r.status, json: async () => ({}) };
     return { ok: true, status: 200, json: async () => r };
@@ -29,7 +29,7 @@ function armar(respuestas, { debounceMs = 15 } = {}) {
   return { b, pedidos, cambios };
 }
 
-const pag = (items, { pagina = 0, hayMas = false, total = items.length, error = null, remoto = true } = {}) => ({ q: '', pagina, items, hayMas, total, remoto, error });
+const pag = (items, { next = null, error = null, remoto = true } = {}) => ({ q: '', items, nextPageToken: next, remoto, error });
 
 test('debounce: escribir "soda" letra por letra hace UN solo pedido, no cuatro', async () => {
   const { b, pedidos } = armar(() => pag([item(1)]));
@@ -99,11 +99,12 @@ test('429 (demasiados pedidos) y 500 se muestran como error, no se cuelga', asyn
 });
 
 test('error parcial: hay resultados locales pero lo online fallo -> se ven y se avisa', async () => {
-  const { b } = armar(() => pag([item(1)], { error: 'No se pudo consultar el catálogo online' }));
+  const { b } = armar(() => pag([item(1)], { error: { codigo: 'cuota_agotada', mensaje: 'Se agotó la cuota diaria de búsquedas de YouTube' } }));
   b.consultar('soda');
   await espera(60);
   assert.equal(b.estado.estado, 'ok');
-  assert.match(b.estado.error, /catálogo online/);
+  assert.match(b.estado.error, /cuota diaria/);
+  assert.equal(b.estado.errorCodigo, 'cuota_agotada');
 });
 
 test('un resultado viejo que llega tarde NO pisa a la consulta mas nueva', async () => {
@@ -115,9 +116,13 @@ test('un resultado viejo que llega tarde NO pisa a la consulta mas nueva', async
   assert.equal(b.estado.items[0].titulo, 'resultado de bbb');
 });
 
-test('paginacion: ver mas agrega la pagina siguiente sin repetir ni pisar', async () => {
+test('paginacion con nextPageToken: ver mas pide la pagina siguiente con el token y agrega sin repetir', async () => {
   const todas = Array.from({ length: 25 }, (_, i) => item(i));
-  const { b, pedidos } = armar((q, p) => pag(todas.slice(p * 10, p * 10 + 10), { pagina: p, hayMas: p < 2, total: 25 }));
+  const { b, pedidos } = armar((q, t) => {
+    if (!t) return pag(todas.slice(0, 10), { next: 'TOK1' });
+    if (t === 'TOK1') return pag(todas.slice(10, 20), { next: 'TOK2' });
+    return pag(todas.slice(20), { next: null });
+  });
   b.consultar('tema');
   await espera(60);
   assert.equal(b.estado.items.length, 10);
@@ -128,7 +133,7 @@ test('paginacion: ver mas agrega la pagina siguiente sin repetir ni pisar', asyn
   assert.equal(b.estado.items.length, 25);
   assert.equal(b.estado.hayMas, false);
   assert.equal(b.masResultados(), undefined, 'no hay mas: no pide');
-  assert.deepEqual(pedidos.map((p) => p.pagina), [0, 1, 2]);
+  assert.deepEqual(pedidos.map((p) => p.pageToken), [null, 'TOK1', 'TOK2']);
   assert.equal(new Set(b.estado.items.map((i) => i.id)).size, 25);
 });
 

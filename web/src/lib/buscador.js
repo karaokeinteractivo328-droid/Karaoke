@@ -6,7 +6,8 @@
 // - Estados explicitos para que la interfaz nunca quede "colgada":
 //     'cargando' | 'ok' | 'vacio' | 'error'
 //   y `error` con boton de reintento.
-// - PAGINACION: de a 10; `masResultados()` agrega la pagina siguiente (scroll infinito).
+// - PAGINACION con el `nextPageToken` (opaco) de YouTube: `masResultados()` agrega la pagina
+//   siguiente (scroll infinito).
 // - Consulta vacia = la biblioteca local (lo que se puede cantar ya).
 
 export function crearBuscador({
@@ -19,39 +20,43 @@ export function crearBuscador({
   let timer = null;
   let ctl = null;
   let generacion = 0;
-  const st = { q: '', items: [], pagina: 0, hayMas: false, estado: 'cargando', error: null, remoto: true, cargandoMas: false, total: 0 };
+  const st = { q: '', items: [], nextPageToken: null, hayMas: false, estado: 'cargando', error: null, errorCodigo: null, remoto: true, cargandoMas: false };
 
   const cambio = () => onCambio({ ...st, items: [...st.items] });
 
-  async function pedir(q, pagina, reemplazar) {
+  async function pedir(q, pageToken, reemplazar) {
     ctl?.abort();
     ctl = new AbortController();
     const mia = ++generacion;
     if (reemplazar) {
       st.estado = 'cargando';
       st.error = null;
-      st.pagina = 0;
+      st.errorCodigo = null;
+      st.nextPageToken = null;
     } else {
       st.cargandoMas = true;
     }
     cambio();
     try {
-      const r = await fetchFn(`${base}/api/buscar?q=${encodeURIComponent(q)}&pagina=${pagina}`, { signal: ctl.signal });
+      const url = `${base}/api/buscar?q=${encodeURIComponent(q)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+      const r = await fetchFn(url, { signal: ctl.signal });
       if (r.status === 429) throw new Error('Demasiadas búsquedas seguidas, esperá un segundo');
       if (!r.ok) throw new Error('No se pudo buscar');
       const j = await r.json();
       if (mia !== generacion) return; // llego tarde: ya hay una consulta mas nueva
       st.items = reemplazar ? j.items : [...st.items, ...j.items.filter((x) => !st.items.some((y) => y.id === x.id))];
-      st.pagina = j.pagina;
-      st.hayMas = !!j.hayMas;
-      st.total = j.total;
+      st.nextPageToken = j.nextPageToken || null;
+      st.hayMas = !!j.nextPageToken;
       st.remoto = j.remoto !== false;
-      st.error = j.error || null; // error parcial: hay resultados locales pero lo online fallo
+      // error parcial: hay resultados locales pero YouTube fallo (cuota, red, falta de clave...)
+      st.error = j.error?.mensaje || null;
+      st.errorCodigo = j.error?.codigo || null;
       st.estado = st.items.length ? 'ok' : j.error ? 'error' : 'vacio';
     } catch (e) {
       if (e.name === 'AbortError' || mia !== generacion) return;
       st.estado = reemplazar || !st.items.length ? 'error' : 'ok';
       st.error = String(e.message || 'No se pudo buscar');
+      st.errorCodigo = 'red';
     } finally {
       if (mia === generacion) {
         st.cargandoMas = false;
@@ -74,10 +79,10 @@ export function crearBuscador({
       cambio();
       return;
     }
-    if (ya) return pedir(q, 0, true);
+    if (ya) return pedir(q, null, true);
     st.estado = 'cargando';
     cambio();
-    timer = setTimeout(() => pedir(q, 0, true), debounceMs);
+    timer = setTimeout(() => pedir(q, null, true), debounceMs);
   }
 
   return {
@@ -85,9 +90,9 @@ export function crearBuscador({
     iniciar: () => consultar('', { ya: true }),
     masResultados: () => {
       if (st.estado !== 'ok' || !st.hayMas || st.cargandoMas) return;
-      return pedir(st.q, st.pagina + 1, false);
+      return pedir(st.q, st.nextPageToken, false);
     },
-    reintentar: () => pedir(st.q, 0, true),
+    reintentar: () => pedir(st.q, null, true),
     get estado() {
       return { ...st, items: [...st.items] };
     },

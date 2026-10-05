@@ -206,3 +206,50 @@ test('reintentar vuelve a bajar y puede salir bien', async () => {
   assert.ok(await hasta(() => p.obtener('a')));
   assert.deepEqual(p.estados().map((e) => e.estado), ['lista']);
 });
+
+// ------------------------------------------------------------ canciones de YouTube
+const metaYT = (id, extra = {}) => ({ id, origen: 'youtube', videoId: 'abcdefghijk', titulo: 'T (Karaoke)', duracion: 211, audioEstado: 'lista', lrc: null, ...extra });
+
+test('YouTube: no descarga nada; "lista" cuando el reproductor embebido esta listo en esta pantalla', async () => {
+  const preparados = [];
+  const rutas = { '/api/cancion/yt-a': () => respuesta(metaYT('yt-a')) };
+  const { p, eventos, llamadas } = armar(rutas, {}, { prepararYouTube: async (meta) => { preparados.push(meta.videoId); } });
+  p.apuntar(['yt-a']);
+  assert.ok(await hasta(() => p.obtener('yt-a')));
+  assert.equal(p.obtener('yt-a').blobUrl, null, 'sin blob: no hay archivo');
+  assert.deepEqual(preparados, ['abcdefghijk']);
+  assert.ok(!llamadas.some((u) => /\.m4a|cache-audio/.test(u)), 'no se pide ningun archivo de audio');
+  assert.ok(eventos.some((e) => e.etapa === 'reproductor'));
+  assert.equal(eventos.at(-1).estado, 'lista');
+});
+
+test('YouTube: si el reproductor no se puede preparar (sin Internet / bloqueado) -> error con el motivo', async () => {
+  const rutas = { '/api/cancion/yt-a': () => respuesta(metaYT('yt-a')) };
+  const { p, eventos } = armar(rutas, {}, { prepararYouTube: async () => { throw new Error('no se pudo cargar el reproductor de YouTube (¿sin Internet?)'); } });
+  p.apuntar(['yt-a']);
+  assert.ok(await hasta(() => eventos.some((e) => e.estado === 'error')));
+  assert.match(eventos.at(-1).motivo, /sin Internet/);
+});
+
+test('YouTube: la letra es opcional (si falla igual esta lista) y si llega se entrega', async () => {
+  const rutasA = { '/api/cancion/yt-a': () => respuesta(metaYT('yt-a', { lrc: '/cache-audio/yt-a.lrc' })), '/cache-audio/yt-a.lrc': () => respuesta('x', { ok: false, status: 404 }) };
+  const a = armar(rutasA, {}, { prepararYouTube: async () => {} });
+  a.p.apuntar(['yt-a']);
+  assert.ok(await hasta(() => a.p.obtener('yt-a')));
+  assert.equal(a.p.obtener('yt-a').lrc, null);
+  const rutasB = { '/api/cancion/yt-b': () => respuesta(metaYT('yt-b', { lrc: '/cache-audio/yt-b.lrc' })), '/cache-audio/yt-b.lrc': () => respuesta('[00:05.00] hola', { tipo: 'text/plain' }) };
+  const b = armar(rutasB, {}, { prepararYouTube: async () => {} });
+  b.p.apuntar(['yt-b']);
+  assert.ok(await hasta(() => b.p.obtener('yt-b')));
+  assert.match(b.p.obtener('yt-b').lrc, /hola/);
+});
+
+test('YouTube: el server dice que no se puede reproducir -> error y no se intenta cargar el reproductor', async () => {
+  const rutas = { '/api/cancion/yt-a': () => respuesta(metaYT('yt-a', { audioEstado: 'error', audioMotivo: 'el dueño no permite reproducirlo fuera de YouTube' })) };
+  let preparo = false;
+  const { p, eventos } = armar(rutas, {}, { prepararYouTube: async () => { preparo = true; } });
+  p.apuntar(['yt-a']);
+  assert.ok(await hasta(() => eventos.some((e) => e.estado === 'error')));
+  assert.match(eventos.at(-1).motivo, /fuera de YouTube/);
+  assert.equal(preparo, false);
+});

@@ -11,6 +11,7 @@ import { conectar, SOCKET_URL } from './socket.js';
 import { parsearLRC, indiceActual, tiemposPalabras } from './lrc.js';
 import { crearReloj } from './reloj.js';
 import { crearPrecarga } from './precarga.js';
+import { cargarApiYouTube, crearReproductorYouTube, ESTADO as YT_ESTADO } from './youtube.js';
 import { logAudio, logCancion, errorAudio, diagnostico } from './audioLog.js';
 import { crearReconocimiento } from './vision.js';
 import { crearSeguimiento } from './seguimiento.js';
@@ -85,8 +86,31 @@ const camara = crearCamara($('#camara'), video);
 // PRECARGA: la cancion de quien esta en el escenario y la de quien sigue se bajan, se
 // decodifican y se prueban ANTES de que les toque. Cada cambio de estado se le informa al
 // server (la unica fuente de verdad de si se puede empezar).
+// Reproductor de YouTube de esta pantalla: se crea una sola vez y se reutiliza para todas las canciones.
+let ytPromesa = null;
+let yt = null;
+function reproductorYT() {
+  if (!ytPromesa) {
+    ytPromesa = cargarApiYouTube()
+      .then((YT) => {
+        const r = crearReproductorYouTube({
+          YT,
+          elementoId: 'ytPlayer',
+          origen: location.origin,
+          onEstado: (e) => { if (e === YT_ESTADO.TERMINADO && etapaActual === 'PLAYING' && fuenteActiva === yt?.adaptador) finDeCancion(); },
+          onError: ({ mensaje }) => { if (etapaActual === 'PLAYING') fallarAudio(mensaje); },
+        });
+        yt = r;
+        return r.listo.then(() => r);
+      })
+      .catch((e) => { ytPromesa = null; throw e; });
+  }
+  return ytPromesa;
+}
 const precarga = crearPrecarga({
   base: SOCKET_URL,
+  // YouTube no se descarga: "lista" = el reproductor oficial cargo en esta pantalla
+  prepararYouTube: async () => { await reproductorYT(); },
   onEstado: (id, estado, motivo) => {
     if (!espejo) socket.emit('pantalla:audio', { cancionId: id, estado, motivo });
   },
@@ -305,6 +329,7 @@ socket.on('estado', (s) => {
       break;
     case 'COUNTDOWN':
       $('#cuenta').textContent = s.actual?.cuenta ?? 3;
+      if (cambio && !espejo) calentarYouTube(s.actual);
       break;
     case 'PLAYING':
       if (cambio && !espejo) arrancarCancion(s.actual);
@@ -449,8 +474,18 @@ const barraFill = barra.querySelector('span');
 
 // UNA sola fuente de verdad para la letra, los retos, el progreso y el fin:
 // el tiempo REAL del audio (ver reloj.js). Nada de temporizadores paralelos.
+// La fuente activa es el <audio> (biblioteca local) o el adaptador del reproductor de YouTube;
+// el reloj no se entera de cual es: lee siempre del mismo proxy.
+let fuenteActiva = audio;
+const fuenteReloj = {
+  get currentTime() { return fuenteActiva.currentTime; },
+  get paused() { return fuenteActiva.paused; },
+  get ended() { return fuenteActiva.ended; },
+  get readyState() { return fuenteActiva.readyState; },
+  get playbackRate() { return fuenteActiva.playbackRate || 1; },
+};
 const reloj = crearReloj({
-  audio,
+  audio: fuenteReloj,
   latencia: () => audioBus.contexto?.outputLatency || audioBus.contexto?.baseLatency || 0,
 });
 const claveOffset = (id) => `karaoke:offset:${id}`;
@@ -481,6 +516,16 @@ function fallarAudio(motivo) {
   $('#chipSilencio').hidden = false;
   $('#chipSilencio').textContent = `🔇 ${motivo}`;
   if (!espejo) socket.emit('pantalla:audioFallo', { motivo });
+}
+
+// Cuenta regresiva (3-2-1): el reproductor de YouTube ya se muestra y carga el video en silencio,
+// asi cuando empieza la cancion solo hay que dar play desde el segundo 0.
+function calentarYouTube(actual) {
+  const c = actual?.cancion;
+  if (c?.origen !== 'youtube' || !c.videoId) return;
+  const pre = precarga.obtener(c.id);
+  body.dataset.yt = pre?.lrc ? 'chico' : 'grande';
+  reproductorYT().then((r) => r.precalentar(c.videoId)).catch((e) => errorAudio(`YouTube: no se pudo precalentar (${e.message})`));
 }
 
 async function arrancarCancion(actual) {
@@ -516,8 +561,30 @@ async function arrancarCancion(actual) {
   grabacion.iniciar(recCanvas.stream(30), audioBus.streamGrabacion());
 
   const dur = duracionCancion;
-  const fuente = pre ? pre.blobUrl : meta?.audio ? absUrl(meta.audio) : null;
-  reloj.iniciar({ conAudio: !!fuente });
+  const esYT = meta?.origen === 'youtube';
+  const fuente = esYT ? null : pre ? pre.blobUrl : meta?.audio ? absUrl(meta.audio) : null;
+  fuenteActiva = esYT ? yt?.adaptador || audio : audio;
+  reloj.iniciar({ conAudio: esYT || !!fuente });
+  if (esYT) {
+    // reproduccion SOLO con el reproductor oficial embebido: no se descarga ni se extrae audio
+    body.dataset.yt = pre?.lrc ? 'chico' : 'grande';
+    logAudio(`YouTube ${meta.videoId}: play (${pre?.lrc ? 'letra propia + video chico' : 'letra dentro del video'})`);
+    (async () => {
+      try {
+        const r = await reproductorYT();
+        fuenteActiva = r.adaptador;
+        await r.reproducir(meta.videoId);
+        if (etapaActual !== 'PLAYING') return;
+        reloj.alReproducir(); // recien ahora el tiempo de la letra empieza a correr
+        clearTimeout(finTimer);
+        const total = r.adaptador.duration || dur;
+        finTimer = setTimeout(finDeCancion, total * 1000 + 4000);
+      } catch (e) {
+        if (e.codigo === 'autoplay') fallarAudio('el navegador no deja sonar YouTube: tocá la pantalla una vez (o usá el modo kiosco)');
+        else fallarAudio(e.message || 'no se pudo reproducir el video');
+      }
+    })();
+  }
   if (fuente) {
     let probeRemoto = false;
     const usarRemoto = () => {
@@ -574,7 +641,7 @@ async function arrancarCancion(actual) {
   }
   idxLetra = -2;
   // plan de retos de ESTA performance: atado a la cancion y a las lineas de letra
-  const durReal = Number.isFinite(audio.duration) && audio.duration > 5 ? audio.duration : duracionCancion;
+  const durReal = Number.isFinite(fuenteActiva.duration) && fuenteActiva.duration > 5 ? fuenteActiva.duration : duracionCancion;
   retos.planificar({
     duracion: durReal,
     inicios: letras.filter((l) => l.texto).map((l) => l.tiempo + offsetLetra),
@@ -608,6 +675,7 @@ function tickLetra() {
 // de seguir "cantando" en silencio. (Lo que no se puede ver desde el navegador: que el
 // sistema operativo mande ese sonido al parlante correcto.)
 function verificarSonido(base) {
+  if (fuenteActiva !== audio) return verificarSonidoYouTube(base);
   if (audio.paused || reloj.modo !== 'audio') return;
   if (audioBus.tick() > 0.002) {
     if (!audioDetectado) logAudio(`señal de audio detectada en el grafo (currentTime ${audio.currentTime.toFixed(1)} s)`);
@@ -623,12 +691,25 @@ function verificarSonido(base) {
   }, 3000);
 }
 
+// Con YouTube el sonido sale del iframe y no pasa por el Web Audio API: no se puede medir la
+// señal. Lo que SI se verifica es que el reproductor este reproduciendo, con volumen y sin silencio.
+let ytChequeo = 0;
+function verificarSonidoYouTube(base) {
+  if (reloj.modo !== 'audio' || performance.now() - ytChequeo < 2000) return;
+  ytChequeo = performance.now();
+  const a = fuenteActiva;
+  if (a.muted || a.volume === 0) {
+    errorAudio('YouTube está silenciado: se restablece el volumen');
+    try { yt.restaurarSonido(); } catch {}
+  }
+}
+
 // El server calcula el puntaje (cancion + retos + publico); la pantalla solo
 // informa cuanto de la cancion se canto.
 function finDeCancion() {
   if (mandoFin) return;
   mandoFin = true;
-  const total = reloj.modo === 'audio' && Number.isFinite(audio.duration) && audio.duration > 5 ? audio.duration : duracionCancion;
+  const total = reloj.modo === 'audio' && Number.isFinite(fuenteActiva.duration) && fuenteActiva.duration > 5 ? fuenteActiva.duration : duracionCancion;
   const progreso = Math.min(1, reloj.base() / total);
   if (!espejo) socket.emit('pantalla:fin', { progreso });
 }
@@ -810,6 +891,9 @@ function detenerCancion() {
     audio.removeAttribute('src');
     audio.load();
   } catch {}
+  yt?.detener();
+  delete body.dataset.yt;
+  fuenteActiva = audio;
 }
 
 // --- Retos: cartel y feedback ------------------------------------------------

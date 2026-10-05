@@ -298,6 +298,14 @@ import Base from '../layouts/Base.astro';
     .buscarEstado { min-height: 1.2em; text-align: left; }
     .buscarError { display: flex; flex-direction: column; gap: 0.5rem; align-items: stretch; }
     .canciones :global(li.cargando) { background: linear-gradient(90deg, #eee 25%, #f8f8f8 50%, #eee 75%); background-size: 200% 100%; animation: brillo 1.2s linear infinite; color: transparent; pointer-events: none; }
+    .canciones :global(li.resultado) { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.5rem; }
+    .canciones :global(li .miniatura) { flex: 0 0 auto; width: 96px; height: 54px; border-radius: 0.4rem; object-fit: cover; background: #ddd; display: grid; place-items: center; font-size: 1.4rem; }
+    .canciones :global(li .info) { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+    .canciones :global(li .titulo) { font-size: 0.85em; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .canciones :global(li .tagKaraoke) { align-self: flex-start; font-size: 0.62em; font-weight: 900; letter-spacing: 0.08em; border-radius: 99px; padding: 0.05em 0.6em; background: var(--rosa-hot); color: #fff; margin-top: 0.15rem; }
+    .canciones :global(li.elegida .tagKaraoke) { background: #fff; color: var(--rosa-hot); }
+    .canciones :global(li .elegir) { flex: 0 0 auto; font-family: var(--fat); text-transform: uppercase; font-size: 0.8rem; border: 2px solid var(--tinta); background: var(--tinta); color: #fff; border-radius: 0.5rem; padding: 0.5rem 0.7rem; cursor: pointer; }
+    .canciones :global(li.elegida .elegir) { background: #fff; color: var(--rosa-hot); border-color: #fff; }
     .canciones :global(li .tagFuente) { font-size: 0.7em; font-weight: 800; border-radius: 99px; padding: 0 0.5em; margin-left: 0.4em; background: #eee; color: var(--tinta); }
     .canciones :global(li.elegida .tagFuente) { background: rgba(255,255,255,0.3); color: #fff; }
     @keyframes brillo { to { background-position: -200% 0; } }

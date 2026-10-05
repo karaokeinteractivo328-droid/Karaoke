@@ -122,7 +122,21 @@ export function crearEscenario({
   const cancionPublica = (id) => {
     const c = porId(id);
     return c
-      ? { id: c.id, titulo: c.titulo, artista: c.artista, duracion: Number(c.duracion) || null, voces: c.voces ?? 'solo' }
+      ? {
+          id: c.id,
+          titulo: c.titulo,
+          artista: c.artista,
+          duracion: Number(c.duracion) || null,
+          voces: c.voces ?? 'solo',
+          // lo que se guarda de la cancion elegida (YouTube): videoId, canal, miniatura, con que
+          // consulta se la encontro y cuan "karaoke" es
+          origen: c.origen || 'local',
+          videoId: c.videoId || null,
+          canal: c.canal || c.artista,
+          thumbnail: c.thumbnail || null,
+          searchQuery: c.searchQuery || '',
+          karaokeScore: c.karaokeScore ?? null,
+        }
       : null;
   };
 

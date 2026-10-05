@@ -15,6 +15,10 @@ import Base from '../layouts/Base.astro';
   <div id="tinte"></div>
   <div id="grano"></div>
   <audio id="pista" preload="auto"></audio>
+  <!-- Reproductor oficial de YouTube (IFrame API). Tiene que estar VISIBLE (min. 200x200 px):
+       "grande" cuando el video trae la letra puesta (lo normal en karaoke), "chico" en una
+       esquina cuando la letra la dibujamos nosotros. -->
+  <div id="ytWrap"><div id="ytPlayer"></div></div>
 
   <!-- Sin sonido no hay karaoke: el navegador exige un toque para habilitarlo (o el modo kiosco) -->
   <div id="sonidoOverlay" hidden>

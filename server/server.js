@@ -14,6 +14,7 @@
 import express from 'express';
 import cors from 'cors';
 import { crearCatalogo } from './catalogo.js';
+import { crearYouTube } from './youtube.js';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { readFile, mkdir, writeFile, rm, rename, stat, readdir } from 'node:fs/promises';
@@ -119,21 +120,23 @@ const escenario = crearEscenario({
 });
 
 // --- Catalogo, busqueda y preparacion del audio ------------------------------
-// Ver server/catalogo.js: lrclib (metadata + letra) + biblioteca local + resolvedor a pedido.
-const DIR_CACHE = process.env.CACHE_AUDIO_DIR || join(__dirname, 'cache-audio');
+// Fuente de las canciones: YouTube Data API v3 (buscar) + reproductor embebido de YouTube en la
+// pantalla (sonar). No se descarga ni se extrae audio. Ver server/catalogo.js y server/youtube.js.
+// Ademas: la biblioteca local (suena sin Internet ni clave).
+const DIR_CACHE = process.env.CACHE_AUDIO_DIR || join(__dirname, 'cache-audio'); // solo letras .lrc
 await mkdir(DIR_CACHE, { recursive: true }).catch(() => {});
+const youtube = crearYouTube({ log: (m) => console.log(m) });
 const catalogo = crearCatalogo({
   canciones,
   dirLocal: __dirname,
   dirCache: DIR_CACHE,
   ffmpeg: ffmpegPath || 'ffmpeg',
+  youtube,
   log: (m) => console.log(m),
-  config: { YTDLP: process.env.AUDIO_REMOTO === '0' ? 'off' : process.env.YTDLP },
   // cada vez que el server termina (o falla) de preparar un audio, el escenario lo sabe
   onEstadoAudio: (id, estado, motivo) => escenario.audioServidorEstado(id, estado, motivo),
-  enUso: () => escenario.cancionesEnUso(),
 });
-await catalogo.detectar();
+console.log(`[youtube] ${catalogo.motivoCapacidad}`);
 // la biblioteca local se valida (decodifica / no es silencio) apenas arranca: asi
 // "lista" significa lista, no "existe un archivo"
 for (const c of canciones) catalogo.asegurarAudio(c.id);
@@ -170,20 +173,20 @@ function limitar(maxPorVentana, ventanaMs) {
   };
 }
 
-// 🎵 buscar canciones: biblioteca local + catalogo online (solo lo que realmente se puede reproducir)
+// 🎵 buscar canciones: biblioteca local + YouTube (filtro karaoke). Paginacion con nextPageToken.
 app.get('/api/buscar', limitar(12, 5000), async (req, res) => {
   try {
-    res.json(await catalogo.buscar(String(req.query.q || ''), Number(req.query.pagina) || 0));
+    res.json(await catalogo.buscar(String(req.query.q || ''), req.query.pageToken ? String(req.query.pageToken) : null));
   } catch (e) {
     console.error('[buscar]', e);
-    res.status(500).json({ error: 'No se pudo buscar' });
+    res.status(500).json({ error: { codigo: 'interno', mensaje: 'No se pudo buscar' } });
   }
 });
 
 // meta completa de una cancion + estado de su audio (la pantalla la usa para precargar)
 app.get('/api/cancion/:id', limitar(60, 10_000), async (req, res) => {
   try {
-    await catalogo.resolver(req.params.id);
+    await catalogo.resolver(req.params.id, { busqueda: String(req.query.busqueda || '') });
     const m = catalogo.metaPublica(req.params.id);
     if (!m) return res.status(404).json({ error: 'cancion desconocida' });
     res.json(m);
@@ -205,7 +208,7 @@ app.get('/healthz', (_req, res) => {
     etapa: s.etapa,
     fila: s.filaTotal,
     pantalla: s.pantalla,
-    audio: { resolvedorRemoto: catalogo.remoto, detalle: catalogo.motivoCapacidad },
+    youtube: { configurada: catalogo.remoto, detalle: catalogo.motivoCapacidad, cuota: youtube.cuota() },
     uptime: Math.round(process.uptime()),
   });
 });
@@ -470,9 +473,9 @@ io.on('connection', (socket) => {
     // tras un reinicio el catalogo online esta vacio: si el celu estaba esperando con una cancion
     // de ahi, se vuelve a registrar y a preparar en segundo plano (sin frenar la reconexion)
     const idc = datos.intencion?.cancionId;
-    if (typeof idc === 'string' && /^lrclib-\d+$/.test(idc) && !canciones.some((c) => c.id === idc)) {
+    if (typeof idc === 'string' && /^yt-[A-Za-z0-9_-]{11}$/.test(idc) && !canciones.some((c) => c.id === idc)) {
       catalogo
-        .resolver(idc)
+        .resolver(idc, { busqueda: String(datos.intencion?.busqueda || '') })
         .then(() => {
           const y = escenario.yo(token);
           if (y && !y.cancionId && (y.estado === 'QUEUED' || y.estado === 'CALLED')) {
@@ -522,13 +525,13 @@ io.on('connection', (socket) => {
   socket.on('modo:elegir', ({ modo } = {}, cb) => intent(cb, (t) => escenario.elegirModo(t, modo)));
   // Elegir cancion: se registra (si es del catalogo online), se elige, y de INMEDIATO empieza a
   // prepararse el audio (no cuando le toque el turno).
-  socket.on('cancion:elegir', ({ cancionId, modo } = {}, cb) =>
+  socket.on('cancion:elegir', ({ cancionId, modo, busqueda } = {}, cb) =>
     intent(cb, async (t) => {
       try {
-        await catalogo.resolver(String(cancionId || ''));
+        await catalogo.resolver(String(cancionId || ''), { busqueda: String(busqueda || '') });
       } catch (e) {
         console.warn(`[SONG] no se pudo registrar ${cancionId}: ${e.message}`);
-        return { ok: false, error: 'No se pudo cargar esa canción. Probá con otra.' };
+        return { ok: false, error: e?.codigo === 'no_reproducible' ? e.message : 'No se pudo cargar esa canción. Probá con otra.' };
       }
       const r = escenario.elegirCancion(t, cancionId, modo);
       if (r.ok) {

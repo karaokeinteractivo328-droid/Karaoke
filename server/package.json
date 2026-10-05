@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test test/escenario.test.mjs test/retos.test.mjs test/catalogo.test.mjs",
+    "test": "node --test test/escenario.test.mjs test/retos.test.mjs test/catalogo.test.mjs test/karaoke.test.mjs test/youtube.test.mjs",
     "test:integracion": "node test/integracion.mjs && node test/integracion2.mjs && node test/integracion3.mjs"
   },
   "dependencies": {

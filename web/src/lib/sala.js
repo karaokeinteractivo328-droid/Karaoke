@@ -27,7 +27,7 @@ let ajusteReloj = 0; // serverNow - Date.now()
 let totales = { corazon: 0, fuego: 0, aplauso: 0 };
 let letra = { actual: '', siguiente: '' };
 let yoReal = null; // lo que dice el server (yo puede tener cambios optimistas hasta que llegue lo real)
-let resultados = { q: '', items: [], estado: 'cargando', error: null, hayMas: false, remoto: true, total: 0, cargandoMas: false };
+let resultados = { q: '', items: [], estado: 'cargando', error: null, errorCodigo: null, hayMas: false, remoto: true, cargandoMas: false };
 // 🎵 buscador: debounce, cancelacion, paginacion y estados (ver buscador.js)
 const buscador = crearBuscador({ base: SOCKET_URL, onCambio: (e) => pintarBuscador(e) });
 let modoPendiente = null; // solo/duo elegido ANTES de anotarse (o sin que el server lo confirme todavia)
@@ -106,7 +106,7 @@ socket.on('letra', (l) => {
 // si el server se reinicia, el celu se vuelve a anotar solo con su cancion
 function recordarIntencion() {
   const enFila = yo && (yo.estado === 'QUEUED' || yo.estado === 'CALLED');
-  if (enFila) guardar('karaoke:intencion', JSON.stringify({ enFila: true, cancionId: yo.cancionId, modo: yo.modo }));
+  if (enFila) guardar('karaoke:intencion', JSON.stringify({ enFila: true, cancionId: yo.cancionId, modo: yo.modo, busqueda: yo.cancion?.searchQuery || resultados.q || '' }));
   else if (yo) { try { localStorage.removeItem('karaoke:intencion'); } catch {} }
 }
 
@@ -504,6 +504,45 @@ function pintarAudio() {
   }
 }
 
+// Una tarjeta de resultado: miniatura, titulo, canal, duracion, insignia KARAOKE y boton ELEGIR.
+function tarjetaCancion(c) {
+  const li = document.createElement('li');
+  li.dataset.id = c.id;
+  li.className = 'resultado';
+  if (c.id === yo?.cancionId) li.classList.add('elegida');
+  const miniatura = document.createElement(c.thumbnail ? 'img' : 'span');
+  miniatura.className = 'miniatura';
+  if (c.thumbnail) {
+    miniatura.src = c.thumbnail;
+    miniatura.alt = '';
+    miniatura.loading = 'lazy';
+    miniatura.referrerPolicy = 'no-referrer';
+  } else {
+    miniatura.textContent = '🎵';
+  }
+  const info = document.createElement('span');
+  info.className = 'info';
+  const titulo = document.createElement('span');
+  titulo.className = 'titulo';
+  titulo.textContent = c.titulo;
+  const art = document.createElement('span');
+  art.className = 'art';
+  art.textContent = `${c.canal || c.artista || ''}${c.duracion ? ` · ${mmss(c.duracion)}` : ''}`;
+  info.append(titulo, art);
+  if (c.karaoke?.esKaraoke || c.fuente === 'local') {
+    const k = document.createElement('span');
+    k.className = 'tagKaraoke';
+    k.textContent = c.fuente === 'local' ? 'LISTA' : 'KARAOKE';
+    info.append(k);
+  }
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'elegir';
+  btn.textContent = c.id === yo?.cancionId ? '✓ ELEGIDA' : 'ELEGIR';
+  li.append(miniatura, info, btn);
+  return li;
+}
+
 // Resultados del buscador (loading / vacio / error / paginacion), en todas las tarjetas.
 function pintarBuscador(e) {
   resultados = e;
@@ -522,31 +561,20 @@ function pintarBuscador(e) {
         ul.append(li);
       }
     }
-    for (const c of e.items) {
-      const li = document.createElement('li');
-      li.dataset.id = c.id;
-      if (c.id === yo?.cancionId) li.classList.add('elegida');
-      li.textContent = c.titulo;
-      const art = document.createElement('span');
-      art.className = 'art';
-      art.textContent = `${c.artista}${c.duracion ? ` · ${mmss(c.duracion)}` : ''}`;
-      const tag = document.createElement('span');
-      tag.className = 'tagFuente';
-      tag.textContent = c.lista ? '⚡ lista' : '☁ se prepara al elegirla';
-      art.append(tag);
-      li.append(art);
-      ul.append(li);
-    }
+    for (const c of e.items) ul.append(tarjetaCancion(c));
     estadoEl.textContent =
       e.estado === 'cargando'
-        ? 'Buscando…'
+        ? 'Buscando karaokes en YouTube…'
         : e.estado === 'vacio'
-          ? `No encontramos "${e.q}". Probá con otro artista o título.`
+          ? `No encontramos resultados para "${e.q}". Probá con el artista y el nombre del tema.`
           : e.q
-            ? `${e.total} resultado${e.total === 1 ? '' : 's'}${e.remoto ? '' : ' · la búsqueda online no está disponible en este equipo'}`
-            : 'Disponibles ahora (listas para cantar). Escribí para buscar más.';
+            ? `${e.items.length} resultado${e.items.length === 1 ? '' : 's'}${e.remoto ? ' · los karaoke primero' : ' · la búsqueda de YouTube no está disponible en este equipo'}`
+            : e.remoto
+              ? 'Escribí un artista o tema: buscamos la versión karaoke en YouTube.'
+              : 'Disponibles ahora (listas para cantar). La búsqueda de YouTube no está configurada.';
     errEl.hidden = !e.error;
     errEl.querySelector('.error').textContent = e.error || '';
+    errEl.querySelector('[data-buscar-reintentar]').hidden = e.errorCodigo === 'sin_clave';
     mas.hidden = !(e.estado === 'ok' && e.hayMas);
     mas.textContent = e.cargandoMas ? 'Cargando…' : 'Ver más canciones';
   }
@@ -557,10 +585,10 @@ function pintarBuscador(e) {
 function elegirCancion(id) {
   if (!yo || !enFila(yo) || yo.cancionId === id) return;
   const c = resultados.items.find((x) => x.id === id);
-  yo = { ...yo, cancionId: id, cancion: c ? { id: c.id, titulo: c.titulo, artista: c.artista } : yo.cancion, audio: { estado: 'preparando', etapa: 'servidor' } };
+  yo = { ...yo, cancionId: id, cancion: c ? { id: c.id, titulo: c.titulo, artista: c.canal || c.artista, thumbnail: c.thumbnail, origen: c.fuente === 'youtube' ? 'youtube' : 'local' } : yo.cancion, audio: { estado: 'preparando', etapa: 'servidor' } };
   firmaSelector = '';
   render();
-  enviar('cancion:elegir', { cancionId: id }, () => {
+  enviar('cancion:elegir', { cancionId: id, busqueda: resultados.q || '' }, () => {
     yo = yoReal; // no se pudo: volver a lo que dice el server
     firmaSelector = '';
     render();

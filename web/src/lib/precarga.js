@@ -10,6 +10,10 @@
 // Recien ahi avisa `onEstado(id, 'lista')`. Cualquier fallo avisa 'error' con el motivo.
 //
 // Si la persona cambia de cancion, `apuntar()` cancela la descarga vieja y arranca la nueva.
+//
+// Canciones de YouTube: NO se descarga nada (suenan en el reproductor embebido). Para esas,
+// "lista" = el server verifico con la API que se puede reproducir + el reproductor de YouTube
+// de ESTA pantalla esta cargado y listo (`prepararYouTube`). La letra sincronizada es opcional.
 
 import { logAudio, logCancion, errorAudio } from './audioLog.js';
 
@@ -23,6 +27,7 @@ export function crearPrecarga({
   esperar = (ms) => new Promise((r) => setTimeout(r, ms)),
   onEstado = () => {},
   max = 3,
+  prepararYouTube = async () => { throw new Error('esta pantalla no tiene reproductor de YouTube'); },
   esperaServidorMs = ESPERA_SERVIDOR_MS,
   sondeoMs = SONDEO_MS,
 } = {}) {
@@ -103,6 +108,20 @@ export function crearPrecarga({
       poner(job, 'preparando', null, 'servidor');
       const meta = await traerMeta(job);
       job.meta = meta;
+      if (meta.origen === 'youtube') {
+        // sin descarga: se confirma que el reproductor embebido esta listo en este navegador
+        poner(job, 'preparando', null, 'reproductor');
+        await prepararYouTube(meta, job.ctl.signal);
+        if (meta.lrc) {
+          try {
+            const l = await fetchFn(url(meta.lrc), { signal: job.ctl.signal });
+            if (l.ok) job.lrc = await l.text();
+          } catch { /* la letra es opcional: el video de karaoke ya trae la suya */ }
+        }
+        if (job.ctl.signal.aborted) throw new Cancelado();
+        poner(job, 'lista');
+        return;
+      }
       poner(job, 'preparando', null, 'descarga');
       const origen = meta.audio ? url(meta.audio) : null;
       if (!origen) throw new Error('la canción no tiene fuente de audio');
