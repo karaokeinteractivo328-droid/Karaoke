@@ -802,16 +802,17 @@ body[data-yt="grande"] #ytWrap {
   aspect-ratio: 16 / 9;
   transform: translateX(-50%);
 }
-/* la letra la dibujamos nosotros: el video queda como una ventana chica (>= 200x200 usable) */
+/* la letra la dibujamos nosotros: el video queda en el MINIMO que permite YouTube (200x200 px,
+   visible y sin nada encima). No achicar mas ni esconderlo: incumple sus condiciones. */
 body[data-yt="chico"] #ytWrap {
-  /* a la izquierda: el QR "UNITE" vive abajo a la derecha */
-  left: 2vmin;
+  left: 1.2vmin;
   top: auto;
   right: auto;
-  bottom: 4vmin;
-  width: max(26vw, 360px);
-  height: auto;
-  aspect-ratio: 16 / 9;
+  bottom: 1.8vmin;
+  width: 200px;
+  height: 200px;
+  border-radius: 8px;
+  box-shadow: none;
 }
 /* sin letra propia no hay nada que dibujar encima del video */
 body[data-yt="grande"] #letra { visibility: hidden; }
