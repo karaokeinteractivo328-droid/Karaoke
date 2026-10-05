@@ -21,3 +21,6 @@ server/canciones/**/*.m4a
 server/canciones/**/*.wav
 server/grabaciones/
 grabaciones/
+
+# Audio y letras que el server baja a pedido (cache; se regenera)
+server/cache-audio/

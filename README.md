@@ -16,8 +16,10 @@ hacer y participar sin interrumpir a nadie:
   retos con manos y quién sigue. Nada más.
 - Cada **celular es una segunda pantalla** con la vista que le toca (público,
   en fila, su turno, cantando, resultado, copiloto).
-- La **canción se confirma con la mano**, frente a la cámara de la pantalla
-  (el celu solo la *prepara*).
+- La **canción se elige SOLO desde el celu** (buscador + preparación del audio). La
+  pantalla nunca se usa para navegar canciones y los gestos son solo para los retos.
+- Una canción **no se marca "lista" por tener una URL**: tiene que estar descargada,
+  validada y probada en el navegador de la pantalla. Nunca se empieza sin audio.
 
 ## Arquitectura
 
@@ -58,13 +60,16 @@ npm run dev
 ### Tests
 
 ```bash
-npm -w server test                  # 36 casos con reloj falso: fila, escenario, retos, palabra
-npm -w web test                     # 52 casos: tracking, gestos, retos, reloj y letra
-npm -w server run test:integracion  # sockets REALES: reinicia el server, sube un video, etc.
+npm -w server test                  # 73 casos con reloj falso: fila, audio, catálogo, retos, palabra
+npm -w web test                     # 74 casos: tracking, gestos, retos, reloj, precarga y buscador
+npm -w server run test:integracion  # sockets REALES (3 suites, ver abajo)
 ```
 
-La integración levanta el server en otro puerto, simula pantalla + celus, **lo reinicia
-de verdad** y convierte un video real a mp4 con ffmpeg.
+Las integraciones levantan el server en otro puerto, simulan pantalla + celus y **lo
+reinician de verdad**: convierten un video real a mp4 con ffmpeg (`integracion2`) y prueban
+el catálogo, el audio y la búsqueda **sin Internet** con un lrclib y un yt-dlp simulados
+(`integracion3`: errores, reintentos, fuente rota, silencio, reinicio con una canción online
+en la fila).
 
 ### Modo kiosco (para que el audio suene solo, sin ningún click)
 
@@ -86,7 +91,7 @@ seguro (cierra la performance actual y pasa al siguiente o a STANDBY).
 | Estado | Qué pasa | Sale a |
 |---|---|---|
 | `STANDBY` | Nadie cantando ni esperando: bienvenida + **QR único** + top de la noche | `CALLING` apenas alguien entra a la fila |
-| `CALLING` | "TURNO DE X": elige/confirma la canción **con la mano** en la pantalla | `COUNTDOWN` (confirmó) · siguiente (timeout) |
+| `CALLING` | "TURNO DE X": se ve qué va a cantar y si su **audio está listo**; el celu toca **LISTO** | `COUNTDOWN` (LISTO) · siguiente (timeout o audio roto) |
 | `COUNTDOWN` | 3-2-1 | `PLAYING` |
 | `PLAYING` | Prioridad total al cantante: cámara, letra, retos, reacciones | `RESULT` |
 | `RESULT` | Puntaje + desglose + reacciones + QR del video (15 s). Ya se avisó al siguiente | `CALLING` si hay fila, si no `STANDBY` |
@@ -100,27 +105,70 @@ no existe "esperar para siempre".
 → `CALLED` (le toca) → `SINGING` → `DONE` (ve su puntaje y su video) → de nuevo `PUBLIC`.
 El **copiloto** es un rol, no un estado.
 
-### Elegir la canción con la mano
+### Canciones: búsqueda, audio y precarga
 
-En `CALLING` la pantalla muestra la lista y la persona se para frente a la cámara:
+**Se elige solo desde el celu** (🎵 ¿qué querés cantar?): buscador por artista o título, con
+*debounce* de 350 ms (no se le pega a la API por tecla), resultados que se cancelan si
+seguís escribiendo, estados de carga / vacío / error con **Reintentar**, y scroll infinito.
 
-| Gesto | Acción |
+**De dónde sale cada cosa (arquitectura híbrida)** — [server/catalogo.js](server/catalogo.js):
+
+| Pieza | Proveedor | Por qué |
+|---|---|---|
+| Buscar canciones + letra sincronizada | **lrclib.net** | gratis, sin clave, CORS abierto, 20 resultados por búsqueda con letra `.lrc` y duración |
+| Audio de la biblioteca | **local** (`server/canciones`, o Supabase Storage en línea) | siempre anda, sin Internet |
+| Audio de cualquier otra canción | **resolvedor a pedido en el server** (`yt-dlp`) | busca la versión cuya **duración coincide con la letra**, la baja entera, la valida y la sirve desde nuestro propio server (mismo CORS, `Range`, `currentTime` exacto) |
+
+Descartados: *Spotify* (no entrega audio crudo, exige Premium), *Deezer / iTunes* (solo
+previews de 30 s), *Jamendo* (canciones completas pero solo música independiente),
+*YouTube IFrame* (sin control de preload ni de sincronización, con anuncios).
+⚠️ Bajar audio con `yt-dlp` va contra los términos de YouTube: es una decisión del proyecto
+(ya se usaba para armar la biblioteca) y se puede apagar con `AUDIO_REMOTO=0`. **Sin
+`yt-dlp` en el equipo solo se ofrece la biblioteca local** (nunca metadata sin audio):
+`/healthz` dice si el resolvedor está disponible.
+
+**Preparación ANTES del turno.** Apenas elegís una canción: el server la registra y empieza
+a prepararla (descarga + validación con ffmpeg: decodifica, dura lo que debe, **no es
+silencio**), y la pantalla —la que suena— **precarga la del que está en el escenario y la
+del que sigue**: la baja entera a memoria, la decodifica en un `<audio>` aparte, comprueba
+la duración y prueba `play()`. Si cambiás de canción mientras esperás, la descarga vieja se
+cancela y arranca la nueva. Cuando te toca, el audio ya está en memoria: sin red.
+
+| Estado que ve el celu | Significa |
 |---|---|
-| mano arriba / abajo | mover la selección |
-| pellizco (pulgar + índice) ~1 s | confirmar |
+| ⏳ Preparando el audio… | se está bajando / validando / cargando en la pantalla |
+| ✅ Audio listo | existe + cargó + se decodifica + `play()` funciona + hay sonido habilitado |
+| 🔇 Falta activar el sonido | el navegador de la pantalla tiene el audio bloqueado |
+| ⚠️ No se pudo preparar el audio | con el motivo; botones **Reintentar** y **Elegir otra canción** |
 
-Desde el celu, mientras espera, ya puede **preparar** su canción (queda resaltada
-y es la que arranca por defecto). El botón **EMPEZAR** del celu es solo un
-**respaldo**: aparece si la cámara no está sana o pasados 20 s de `CALLING`, para
-que el escenario nunca se trabe.
+`LISTO` está **deshabilitado** hasta que el audio esté realmente listo y el server lo rechaza
+igual si se intenta. Si no se prepara a tiempo (`AUDIO_ESPERA_MS`) el turno se libera y pasa
+el siguiente; si el audio falla en plena canción (`play()` rechazado, error del `<audio>`,
+sin señal en la salida) la performance se cierra con el motivo en vez de cantar en silencio.
+
+**Sonido en la instalación física.** El navegador exige un toque para habilitar el audio. Si
+no está habilitado, la pantalla muestra un cartel enorme **"🔊 Tocá la pantalla para activar el
+sonido"** y el escenario no arranca hasta que se toca (o se abre Chrome en modo kiosco, ver
+abajo). Además, durante la canción se mide la **señal real en el grafo de audio**: si el
+audio avanza pero no hay señal, se intenta destrabar y, si sigue mudo, se corta con el motivo.
+Lo que ningún navegador puede ver es hacia qué **parlante** manda el sistema operativo ese
+sonido: eso se elige en el volumen del sistema (ver la prueba manual).
+
+**Diagnóstico.** Todo el recorrido deja líneas `[SONG]` / `[AUDIO]` / `[AUDIO ERROR]` en la
+consola de la pantalla (`window.__karaoke.diagnostico()` las devuelve). Los errores nunca
+se esconden.
+
+Variables del server: `AUDIO_REMOTO=0` (apaga el resolvedor), `YTDLP` (comando, si no es
+`yt-dlp`), `LRCLIB_URL`, `CACHE_AUDIO_DIR` (por defecto `server/cache-audio`, se limpia solo:
+máx. 40 canciones, nunca las que están en la fila).
 
 ### El celular (`/sala`, una página, una vista por rol)
 
 | Rol | Ve |
 |---|---|
 | Público | quién canta (con barra de progreso), quién sigue, ❤️🔥👏 grandes, **🎤 Quiero cantar** |
-| En fila | posición y tiempo estimado, buscador de canciones, solo/dúo, cancelar, **código de copiloto** |
-| Su turno | "¡PASÁ AL FRENTE!" (vibra), canción preparada, respaldo "empezar desde el celu" |
+| En fila | posición y tiempo estimado, **buscador de canciones** con estado del audio, solo/dúo, cancelar, **código de copiloto** |
+| Su turno | "¡PASÁ AL FRENTE!" (vibra), estado del audio y **¡LISTO!** (solo se habilita con el audio listo) |
 | Cantando | su canción, reacciones en vivo, teleprompter, "Terminar" |
 | Resultado | puntaje con desglose, **link privado a su video**, "Cantar de nuevo" |
 | Copiloto | teleprompter de la letra; no puede controlar nada |
@@ -180,9 +228,9 @@ guardan en el leaderboard.
 | Se desconecta un celu | gracia por rol; reconexión automática por token; recibe el estado actual |
 | Se cierra / recarga la pantalla | la fila vive en el server y no se reinicia; si pasaba en COUNTDOWN/PLAYING esa performance se cierra como interrumpida |
 | Se reinicia el server | la pantalla vuelve a STANDBY; cada celu se vuelve a anotar solo con su canción (se pierde el orden exacto) |
-| Falla la cámara | chip "sin cámara"; sin retos con manos; el celu puede arrancar el turno |
+| Falla la cámara | chip "sin cámara"; sin retos con manos; todo lo demás sigue (el turno es del celu) |
 | Falla el micrófono | video sin voz; chip "sin micrófono" |
-| Audio bloqueado | chip 🔇; un toque lo destraba (o modo kiosco) |
+| Audio bloqueado / roto | cartel "tocá la pantalla para activar el sonido"; el escenario no arranca sin sonido; audio que falla en plena canción = performance cerrada con el motivo |
 | Sin Internet | se sirve el audio **local** si existe (`server/canciones/<id>/<id>.m4a`); lo remoto falla en silencio y los puntajes se reintentan |
 | La pantalla se cuelga en PLAYING | duración + 25 s sin `fin` → resultado forzado |
 | Dos pantallas abiertas | la última que se conecta manda; las otras son **espejo** (chip 🪞) y no pueden mandar nada |
@@ -266,7 +314,7 @@ MediaPipe suele repetir la etiqueta, así que las dos compartían filtro y se me
 
 Si la cámara anda pero MediaPipe no carga (antes era **silencioso** y los retos con manos
 simplemente no aparecían), ahora sale un chip 🖐️ y el escenario lo trata como cámara
-caída: se habilita el respaldo del celu y el reto de la palabra sigue funcionando.
+caída: los retos con gestos se saltean y el reto de la palabra sigue funcionando.
 
 ### Retos durante la canción
 
@@ -339,7 +387,9 @@ copia los `.wasm` a `web/public/mediapipe/wasm`, baja los modelos
 (`hand_landmarker.task`, `blaze_face_short_range.tflite`) a `web/public/models/`
 y las fuentes a `web/public/fonts/`. Todo gitignored. Para forzarlo: `npm -w web run prep:mediapipe`.
 
-## Agregar canciones
+## Agregar canciones a la biblioteca local
+
+(Esto es solo para la **biblioteca** que suena sin Internet: cualquier otra canción se busca desde el celu.)
 
 Requiere `yt-dlp` (`pip install yt-dlp`). `ffmpeg` es opcional.
 
@@ -357,9 +407,9 @@ Si la letra va adelantada o atrasada respecto a la pista, ajustala **en vivo con
 
 ## MVP vs funciones futuras
 
-**MVP (hecho):** una sala con QR estable, fila dinámica, celu por rol, canción elegida
-con la mano, retos, puntaje en 3 partes, copiloto, video privado, recuperación de
-fallas y leaderboard en Supabase.
+**MVP (hecho):** una sala con QR estable, fila dinámica, celu por rol, **búsqueda de
+canciones desde el celu con audio precargado y validado**, retos, puntaje en 3 partes,
+copiloto, video privado, recuperación de fallas y leaderboard en Supabase.
 
 **Futuro:** fondos/escenarios elegibles y segmentación de persona, votación del
 público y desafíos grupales, dúo con segundo participante en su propio celu, medir la

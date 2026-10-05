@@ -16,12 +16,22 @@ import Base from '../layouts/Base.astro';
   <div id="grano"></div>
   <audio id="pista" preload="auto"></audio>
 
+  <!-- Sin sonido no hay karaoke: el navegador exige un toque para habilitarlo (o el modo kiosco) -->
+  <div id="sonidoOverlay" hidden>
+    <div>
+      <b>🔊</b>
+      <p>Tocá la pantalla para activar el sonido</p>
+      <small>Sin esto la música no se escucha</small>
+    </div>
+  </div>
+
   <header id="marca">karaoke <span>studio</span></header>
 
   <!-- salud de la instalación: solo aparece si algo falla -->
   <div id="chips">
     <span class="chip" id="chipCamara" hidden>📷 sin cámara</span>
     <span class="chip" id="chipManos" hidden>🖐️ sin detección de manos (retos con gestos desactivados)</span>
+    <span class="chip" id="chipSilencio" hidden>🔇 sin sonido</span>
     <span class="chip" id="chipMic" hidden>🎙️ sin micrófono</span>
     <button class="chip" id="chipAudio" hidden>🔇 tocá la pantalla para activar el sonido</button>
     <span class="chip" id="chipEspejo" hidden>🪞 pantalla espejo (otra pantalla tiene el control)</span>
@@ -70,7 +80,7 @@ import Base from '../layouts/Base.astro';
     <p class="kicker">Turno de</p>
     <h2 class="cartel" id="turnoNombre">Nombre</h2>
     <p class="kicker" id="turnoModo" hidden></p>
-    <ul id="lista"></ul>
+    <p id="turnoCancion"></p>
     <p class="hint" id="turnoFase"></p>
     <div id="turnoBarra"><span></span></div>
   </section>

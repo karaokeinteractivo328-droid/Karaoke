@@ -10,6 +10,8 @@
 import { conectar, SOCKET_URL } from './socket.js';
 import { parsearLRC, indiceActual, tiemposPalabras } from './lrc.js';
 import { crearReloj } from './reloj.js';
+import { crearPrecarga } from './precarga.js';
+import { logAudio, logCancion, errorAudio, diagnostico } from './audioLog.js';
 import { crearReconocimiento } from './vision.js';
 import { crearSeguimiento } from './seguimiento.js';
 import { crearGestos } from './manos.js';
@@ -76,7 +78,19 @@ cargarQr();
 // --- Fondo + audio + camara ------------------------------------------
 const fondo = crearFondo($('#estrella-wrap'));
 const audioBus = crearAudioBus(audio);
+// diagnostico: en la consola, window.__karaoke.estadoAudio() muestra por que (no) suena
+window.__karaoke = { audio, audioBus, diagnostico };
 const camara = crearCamara($('#camara'), video);
+
+// PRECARGA: la cancion de quien esta en el escenario y la de quien sigue se bajan, se
+// decodifican y se prueban ANTES de que les toque. Cada cambio de estado se le informa al
+// server (la unica fuente de verdad de si se puede empezar).
+const precarga = crearPrecarga({
+  base: SOCKET_URL,
+  onEstado: (id, estado, motivo) => {
+    if (!espejo) socket.emit('pantalla:audio', { cancionId: id, estado, motivo });
+  },
+});
 const grabacion = crearGrabacion();
 
 // canvas 1280x720 que se GRABA: camara + letra + marca de agua
@@ -117,7 +131,7 @@ audioBus.desbloquear();
 
 function frame() {
   fondo.latir(audioBus.tick());
-  camara.dibujar(datosManos, seleccionActiva());
+  camara.dibujar(datosManos);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -139,11 +153,8 @@ const manosDisponibles = () => camaraOk === true && deteccionViva();
 const seguimiento = crearSeguimiento();
 
 const gestos = crearGestos({
-  getSeleccionActiva: () => seleccionActiva(),
   getOpciones: () => (palabraEstado && !espejo && manosDisponibles() ? palabraEstado.opciones.length : 0),
   onOpcion: (i) => responderPalabraConMano(i),
-  onScroll: (dir) => moverSeleccion(dir === 'arriba' ? -1 : 1),
-  onConfirmar: () => confirmarConLaMano(),
   onManos: (d) => {
     datosManos = d;
     fondo.setModo(
@@ -211,7 +222,9 @@ function salud() {
   $('#chipCamara').hidden = camaraOk !== false;
   $('#chipManos').hidden = !manosCaidas;
   $('#chipMic').hidden = s.mic;
-  $('#chipAudio').hidden = s.audio;
+  $('#chipAudio').hidden = true; // reemplazado por el cartel grande: sin sonido no hay karaoke
+  $('#sonidoOverlay').hidden = s.audio;
+  if (!s.audio) audioBus.contexto?.resume?.().catch(() => {}); // si ya hubo un gesto, se destraba solo
   const k = JSON.stringify(s);
   if (k !== saludPrevia && socket.connected && !espejo) {
     saludPrevia = k;
@@ -219,10 +232,19 @@ function salud() {
   }
 }
 setInterval(salud, 2000);
-$('#chipAudio').addEventListener('click', () => {
-  audioBus.desbloquear();
+// tocar la pantalla (cualquier lado) habilita el sonido; no hace falta ningun boton
+function activarSonido() {
+  Promise.resolve(audioBus.desbloquear()).then(() => {
+    logAudio(`AudioContext: ${audioBus.contexto?.state}`);
+    salud();
+  });
+}
+$('#sonidoOverlay').addEventListener('click', activarSonido);
+audioBus.contexto?.addEventListener('statechange', () => {
+  logAudio(`AudioContext cambio a: ${audioBus.contexto.state}`);
   salud();
 });
+setTimeout(salud, 300);
 
 // Atajo de emergencia (operador): cierra lo que haya y vuelve a un estado seguro.
 addEventListener('keydown', (e) => {
@@ -239,6 +261,11 @@ socket.on('connect', () => {
   $('#chipSinServer').hidden = true;
   saludPrevia = '';
   salud();
+  // el server pudo haberse reiniciado: se le dice de nuevo que audio tiene la pantalla listo
+  for (const j of precarga.estados()) socket.emit('pantalla:audio', { cancionId: j.id, estado: j.estado, motivo: j.motivo });
+});
+socket.on('audio:reintentar', ({ cancionId } = {}) => {
+  if (cancionId && precarga.ids.includes(cancionId)) precarga.reintentar(cancionId);
 });
 socket.on('disconnect', () => ($('#chipSinServer').hidden = false));
 socket.on('connect_error', (e) => {
@@ -274,11 +301,10 @@ socket.on('estado', (s) => {
       break;
     case 'CALLING':
       if (cambio) detenerCancion();
-      pintarCalling(s, cambio);
+      pintarCalling(s);
       break;
     case 'COUNTDOWN':
       $('#cuenta').textContent = s.actual?.cuenta ?? 3;
-      if (cambio) precargarCancion(s.actual); // el audio y la letra se bajan durante el 3-2-1
       break;
     case 'PLAYING':
       if (cambio && !espejo) arrancarCancion(s.actual);
@@ -290,6 +316,14 @@ socket.on('estado', (s) => {
   pintarCantando(s);
   pintarSiguiente(s);
   etapaPrevia = s.etapa;
+
+  // Que audio tener cargado: el de quien esta en el escenario y el de quien sigue. Si alguien
+  // cambia de cancion mientras espera, la precarga vieja se cancela y arranca la nueva.
+  if (!espejo) {
+    const enEscena = s.etapa !== 'RESULT' && s.etapa !== 'STANDBY' ? s.actual?.cancion?.id : null;
+    precarga.proteger(s.etapa === 'COUNTDOWN' || s.etapa === 'PLAYING' ? [s.actual?.cancion?.id] : []);
+    precarga.apuntar([enEscena, s.siguiente?.cancionId]);
+  }
 });
 
 // la barra de tiempo del llamado (se anima sola mientras dure CALLING)
@@ -300,73 +334,32 @@ setInterval(() => {
   $('#turnoBarra span').style.width = (resto * 100).toFixed(1) + '%';
 }, 200);
 
-// --- CALLING: la cancion se elige CON LA MANO -------------------------------
-// subir/bajar mueve el resaltado, pellizco sostenido confirma. Si la persona ya
-// dejo una cancion preparada desde el celu, el resaltado arranca ahi.
-let indiceSel = 0;
-let manoTocada = false; // si ya movio el resaltado con la mano, el celu no se lo pisa
-let confirmando = false;
-
-function seleccionActiva() {
-  return etapaActual === 'CALLING' && !espejo && manosDisponibles() && catalogoFull.length > 0;
-}
-
-function pintarLista() {
-  const ul = $('#lista');
-  if (ul.children.length !== catalogoFull.length) {
-    ul.innerHTML = '';
-    catalogoFull.forEach((c) => {
-      const li = document.createElement('li');
-      li.innerHTML = `${escapeHtml(c.titulo)} <span class="art">${escapeHtml(c.artista)}</span><span class="prep" hidden>✓ PREPARADA</span>`;
-      ul.appendChild(li);
-    });
-  }
-  const prepId = snap?.actual?.preparada ? snap.actual.cancion?.id : null;
-  [...ul.children].forEach((li, k) => {
-    li.classList.toggle('activa', k === indiceSel);
-    li.querySelector('.prep').hidden = catalogoFull[k]?.id !== prepId;
-  });
-  ul.children[indiceSel]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-}
-
-function moverSeleccion(dir) {
-  const n = catalogoFull.length;
-  if (!n) return;
-  manoTocada = true;
-  indiceSel = (indiceSel + dir + n) % n;
-  pintarLista();
-}
-
-function confirmarConLaMano() {
-  const c = catalogoFull[indiceSel];
-  if (!c || confirmando) return;
-  confirmando = true;
-  flash('¡ELEGIDA!');
-  socket.emit('pantalla:confirmar', { cancionId: c.id });
-}
-
-function pintarCalling(s, cambio) {
+// --- CALLING: el turno de alguien -----------------------------------------------
+// La cancion se elige SOLO desde el celu (la pantalla es un escenario, no un menu). Aca se
+// ve de quien es el turno, que va a cantar y si su audio ya esta listo para sonar.
+function pintarCalling(s) {
   const a = s.actual;
   if (!a) return;
   $('#turnoNombre').textContent = a.nombre;
   const modo = $('#turnoModo');
-  // siempre se ve como va a cantar: solo o a dueto (lo elige la persona en su celu)
   modo.hidden = false;
   modo.textContent = a.modo === 'duo' ? 'a dúo · voz 1 y voz 2' : 'solo';
-  if (cambio) {
-    confirmando = false;
-    manoTocada = false;
-    indiceSel = Math.max(0, catalogoFull.findIndex((c) => c.id === a.cancion?.id));
-  } else if (!manoTocada && a.cancion) {
-    const k = catalogoFull.findIndex((c) => c.id === a.cancion.id);
-    if (k >= 0) indiceSel = k; // la dejo preparada desde el celu mientras tanto
-  }
-  pintarLista();
-  $('#turnoFase').textContent = seleccionActiva()
-    ? 'Mano arriba / abajo para elegir · pellizcá para confirmar'
-    : camaraOk === false
-      ? 'Sin cámara: elegí y tocá EMPEZAR desde tu celular'
-      : 'Elegí tu canción con la mano';
+  const c = a.cancion;
+  $('#turnoCancion').innerHTML = c
+    ? `${escapeHtml(c.titulo)} <span class="art">${escapeHtml(c.artista)}</span>`
+    : '<span class="art">eligiendo su canción en el celu…</span>';
+  const au = a.audio || {};
+  const fase = $('#turnoFase');
+  fase.dataset.audio = au.estado || '';
+  fase.textContent = !c
+    ? 'Elegí tu canción desde el celu'
+    : au.estado === 'lista'
+      ? '✓ Audio listo · tocá LISTO en tu celu'
+      : au.estado === 'bloqueado'
+        ? '🔇 Tocá la pantalla para activar el sonido'
+        : au.estado === 'error'
+          ? `⚠️ No se pudo preparar el audio${au.motivo ? ` (${au.motivo})` : ''}`
+          : `⏳ Preparando el audio… ${au.etapa === 'pantalla' ? '(cargando en la pantalla)' : au.etapa === 'servidor' ? '(consiguiendo la canción)' : ''}`;
 }
 
 // "🎤 NOMBRE · ❤️3 🔥1" solo mientras alguien canta
@@ -449,7 +442,8 @@ let duracionCancion = 40;
 let cancionId = '';
 let mandoFin = false;
 let audioHandlers = []; // listeners de la cancion en curso (se quitan al terminar)
-let precarga = null; // { id, meta, lrc: Promise } - se baja durante el 3-2-1
+let audioDetectado = false; // se vio señal real en el analizador (la musica llega al grafo)
+let silencioChequeado = 0;
 const barra = $('#progreso');
 const barraFill = barra.querySelector('span');
 
@@ -473,42 +467,37 @@ function soltarAudio() {
 
 async function buscarMeta(actual) {
   const id = actual?.cancion?.id;
-  return catalogoFull.find((c) => c.id === id) || (await cargarCatalogo()).find((c) => c.id === id) || actual?.cancion;
+  try {
+    const r = await fetch(`${SOCKET_URL}/api/cancion/${encodeURIComponent(id)}`);
+    if (r.ok) return await r.json();
+  } catch {}
+  return catalogoFull.find((c) => c.id === id) || actual?.cancion;
 }
 
-// Durante el 3-2-1 ya se baja el audio y la letra: cuando empieza PLAYING no
-// hay que esperar ni a la red ni al decodificador, y el reloj arranca parejo.
-async function precargarCancion(actual) {
-  const id = actual?.cancion?.id;
-  if (espejo || !id || precarga?.id === id) return;
-  const meta = await buscarMeta(actual);
-  if (!meta || precarga?.id === id) return;
-  const p = { id, meta, lrc: Promise.resolve(null) };
-  precarga = p;
-  if (meta.lrc) {
-    p.lrc = fetch(SOCKET_URL + meta.lrc)
-      .then((r) => r.text())
-      .then(parsearLRC)
-      .catch((e) => { console.warn('letra:', e.message); return null; });
-  }
-  if (meta.audio) {
-    soltarAudio();
-    audio.src = absUrl(meta.audio);
-    audio.load();
-  }
+// La pantalla no pudo reproducir: nunca se "canta en silencio". El server cierra la performance
+// con el motivo y pasa a la siguiente.
+function fallarAudio(motivo) {
+  errorAudio(`fallo de reproducción: ${motivo}`);
+  $('#chipSilencio').hidden = false;
+  $('#chipSilencio').textContent = `🔇 ${motivo}`;
+  if (!espejo) socket.emit('pantalla:audioFallo', { motivo });
 }
 
 async function arrancarCancion(actual) {
   const id = actual?.cancion?.id;
-  if (precarga?.id !== id) await precargarCancion(actual); // por si se recargo la pagina a mitad
-  const pre = precarga?.id === id ? precarga : { id, meta: actual?.cancion, lrc: Promise.resolve(null) };
-  const meta = pre.meta;
+  const pre = precarga.obtener(id); // lo normal: ya esta cargada y probada
+  const meta = pre?.meta || (await buscarMeta(actual));
+  logCancion(`PLAYING ${id}: ${pre ? 'audio precargado en memoria' : 'SIN precarga (se usa la URL del server)'}`);
+  if (!pre) errorAudio(`${id}: entró a PLAYING sin audio precargado`);
 
   soltarAudio();
   letras = [];
   voces = [];
   idxLetra = -1;
   mandoFin = false;
+  audioDetectado = false;
+  silencioChequeado = 0;
+  $('#chipSilencio').hidden = true;
   cancionId = id || '';
   // el ajuste que hizo la persona con [ y ] queda guardado para esa cancion
   let guardado = null;
@@ -527,27 +516,45 @@ async function arrancarCancion(actual) {
   grabacion.iniciar(recCanvas.stream(30), audioBus.streamGrabacion());
 
   const dur = duracionCancion;
-  reloj.iniciar({ conAudio: !!meta?.audio });
-  if (meta?.audio) {
+  const fuente = pre ? pre.blobUrl : meta?.audio ? absUrl(meta.audio) : null;
+  reloj.iniciar({ conAudio: !!fuente });
+  if (fuente) {
     let probeRemoto = false;
     const usarRemoto = () => {
-      // el audio local no esta (o fallo): probamos el de Supabase antes de resignarnos
-      if (!meta.audioRemoto || probeRemoto) return;
+      // la copia local fallo: probamos la de Supabase antes de resignarnos
+      if (!meta.audioRemoto || probeRemoto) return false;
       probeRemoto = true;
+      logAudio('probando la copia remota del audio');
       audio.src = meta.audioRemoto;
       audio.load();
-      audio.play().catch(() => {});
+      audio.play().catch((e) => fallarAudio(`play() rechazado: ${e.message}`));
+      return true;
     };
     escucharAudio('playing', () => {
       reloj.alReproducir(); // recien ahora el tiempo de la letra empieza a correr
+      logAudio(`reproduciendo: currentTime ${audio.currentTime.toFixed(2)} · volumen ${audio.volume} · muted ${audio.muted} · AudioContext ${audioBus.contexto?.state}`);
       clearTimeout(finTimer);
       finTimer = setTimeout(finDeCancion, ((Number.isFinite(audio.duration) && audio.duration) || dur) * 1000 + 4000);
     });
     escucharAudio('ended', finDeCancion);
-    escucharAudio('error', usarRemoto);
+    escucharAudio('waiting', () => logAudio(`el audio espera datos (readyState ${audio.readyState})`));
+    escucharAudio('stalled', () => errorAudio(`el audio se trabó (networkState ${audio.networkState})`));
+    escucharAudio('error', () => {
+      errorAudio(`error del <audio>: código ${audio.error?.code} ${audio.error?.message || ''}`);
+      if (!usarRemoto()) fallarAudio(`el audio dio error (${audio.error?.code ?? '?'})`);
+    });
+    logAudio(`AudioContext: ${audioBus.contexto?.state} · fuente: ${pre ? 'blob precargado' : fuente}`);
+    audio.src = fuente;
+    audio.volume = 1;
+    audio.muted = false;
     try { audio.currentTime = 0; } catch {}
-    if (audio.error) usarRemoto(); // ya habia fallado durante la precarga
-    audio.play().catch(() => {});
+    audio.play().then(
+      () => logAudio('play() OK'),
+      (e) => {
+        errorAudio(`play() rechazado: ${e.name}: ${e.message}`);
+        if (!usarRemoto()) fallarAudio(`play() rechazado: ${e.message}`);
+      }
+    );
   }
   // si el audio nunca suena el reloj sigue solo (ver reloj.js) y esto cierra la cancion
   finTimer = setTimeout(() => { if (reloj.modo !== 'audio') finDeCancion(); }, (dur + 8) * 1000);
@@ -555,8 +562,12 @@ async function arrancarCancion(actual) {
   clearInterval(loopId);
   loopId = setInterval(tickLetra, 60);
 
-  // la letra ya se venia bajando; mientras tanto el audio ya puede estar sonando
-  const lrc = await pre.lrc;
+  // la letra ya viene con la precarga (si no, se baja ahora)
+  let texto = pre?.lrc;
+  if (!texto && meta?.lrc) {
+    try { texto = await fetch(absUrl(meta.lrc)).then((r) => r.text()); } catch (e) { errorAudio(`letra: ${e.message}`); }
+  }
+  const lrc = texto ? parsearLRC(texto) : null;
   if (lrc?.length) {
     letras = lrc;
     if (modoActual === 'duo') voces = repartirDuo(letras);
@@ -585,9 +596,31 @@ function tickLetra() {
     mostrarLinea(nuevo);
   }
   pintarPalabras(t);
+  verificarSonido(base);
   // los retos usan el MISMO reloj que la letra (segundos de audio), no uno propio
   const hayManos = manosDisponibles();
   retos.tick(base, hayManos ? datosManos : null, { hayManos });
+}
+
+// La prueba de que la musica SUENA: el analizador esta en el mismo grafo que los parlantes.
+// Si el audio avanza pero no hay señal pasados unos segundos (contexto suspendido, grafo
+// roto) se intenta destrabar y, si sigue mudo, la performance se cierra con el motivo en vez
+// de seguir "cantando" en silencio. (Lo que no se puede ver desde el navegador: que el
+// sistema operativo mande ese sonido al parlante correcto.)
+function verificarSonido(base) {
+  if (audio.paused || reloj.modo !== 'audio') return;
+  if (audioBus.tick() > 0.002) {
+    if (!audioDetectado) logAudio(`señal de audio detectada en el grafo (currentTime ${audio.currentTime.toFixed(1)} s)`);
+    audioDetectado = true;
+    return;
+  }
+  if (audioDetectado || base < 20 || performance.now() - silencioChequeado < 3000) return;
+  silencioChequeado = performance.now();
+  errorAudio(`el audio avanza (${base.toFixed(1)} s) pero NO hay señal en la salida · AudioContext ${audioBus.contexto?.state}`);
+  audioBus.desbloquear();
+  setTimeout(() => {
+    if (!audioDetectado && etapaActual === 'PLAYING') fallarAudio('no se detecta sonido en la salida');
+  }, 3000);
 }
 
 // El server calcula el puntaje (cancion + retos + publico); la pantalla solo
@@ -769,7 +802,6 @@ function detenerCancion() {
   soltarAudio();
   mostrarLinea(-1, true);
   barra.hidden = true;
-  precarga = null;
   retos.reset();
   palabraEstado = null;
   destaparPalabra();

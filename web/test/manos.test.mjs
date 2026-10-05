@@ -18,16 +18,13 @@ function mano(cx, cy, { pinza = false } = {}) {
 
 const CARA = { cx: 0.5, cy: 0.3, w: 0.12, h: 0.2 }; // menton ~ y=0.41
 
-function escena({ opciones = 0, seleccion = false } = {}) {
+function escena({ opciones = 0 } = {}) {
   const seg = crearSeguimiento();
-  const eventos = { opcion: [], confirmar: 0, scroll: [] };
+  const eventos = { opcion: [] };
   let ultimo = null;
   const g = crearGestos({
-    getSeleccionActiva: () => seleccion,
     getOpciones: () => opciones,
     onOpcion: (i) => eventos.opcion.push(i),
-    onConfirmar: () => eventos.confirmar++,
-    onScroll: (z) => eventos.scroll.push(z),
     onManos: (d) => { ultimo = d; },
   });
   let ts = 10_000;
@@ -233,10 +230,11 @@ test('opciones: un pellizco rapido no responde', () => {
   assert.deepEqual(e.eventos.opcion, []);
 });
 
-test('lista de canciones: pellizco sostenido confirma y mano arriba/abajo scrollea', () => {
-  const e = escena({ seleccion: true });
+test('las canciones NO se eligen con la mano: mano arriba/abajo y pellizco no hacen nada fuera de un reto', () => {
+  const e = escena();
   e.correr(600, () => [mano(0.5, 0.2)]);
-  assert.ok(e.eventos.scroll.includes('arriba'));
-  e.correr(1200, () => [mano(0.5, 0.5, { pinza: true })]);
-  assert.equal(e.eventos.confirmar, 1);
+  const d = e.correr(1500, () => [mano(0.5, 0.5, { pinza: true })]);
+  assert.deepEqual(e.eventos.opcion, [], 'sin reto de palabra no hay nada que confirmar');
+  assert.equal(d.opcionSel, -1);
+  assert.equal('zonaScroll' in d, false, 'ya no existe la zona de scroll');
 });

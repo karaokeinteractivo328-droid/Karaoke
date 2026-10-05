@@ -9,20 +9,16 @@
 //    saludo          movimiento horizontal repetido de una mano (con cooldown)
 //    corazon         dos manos formando un corazon
 //    pellizco        pulgar + indice juntos
-//  Durante el turno de alguien (CALLING) la CANCION SE ELIGE CON LA MANO:
-//    mano arriba / abajo      -> onScroll('arriba' | 'abajo')
-//    pellizco sostenido ~1 s  -> onConfirmar()
-//  Durante el reto de la palabra (opciones en pantalla):
+//  Las canciones NO se eligen con la mano: eso es del celu. Los gestos son solo para los
+//  retos, la interaccion y el puntaje.
+//  Durante el reto de la palabra (opciones en pantalla; no es un menu de canciones):
 //    mano a izquierda / centro / derecha + pellizco sostenido -> onOpcion(i)
 
 import { centroPalma } from './seguimiento.js';
 
 const UMBRAL_PELLIZCO = 0.65; // dist pulgar-indice / tamano de la mano (permisivo)
-const MS_CONFIRMAR = 900;
 const MS_CONFIRMAR_OPCION = 700;
 const MS_TOLERANCIA_PELLIZCO = 250; // el tracker parpadea: no se reinicia el progreso por eso
-const MS_SCROLL = 350;
-const ZONA_SCROLL = 0.45; // debajo de esto = arriba, arriba de (1-esto) = abajo
 const MS_ESTABLE = 220; // la cantidad de manos tiene que mantenerse esto antes de contar
 const MS_ARRIBA_ESTABLE = 200; // manos arriba: igual, no cambia por un frame
 const SEPARACION_DOS_MANOS = 0.12; // dos "manos" mas cerca que esto son una sola mal detectada
@@ -76,14 +72,7 @@ export function esSaludo(hist, ahora, { ventanaMs = 1100, amp = 0.025, minSpan =
   return (rev >= 2 && span >= minSpan) || (rev >= 1 && span >= 0.1);
 }
 
-export function crearGestos({
-  getSeleccionActiva = () => false,
-  getOpciones = () => 0,
-  onScroll,
-  onConfirmar,
-  onOpcion,
-  onManos,
-}) {
+export function crearGestos({ getOpciones = () => 0, onOpcion, onManos }) {
   // estabilidad de la cantidad de manos
   let pend = -1;
   let pendDesde = 0;
@@ -98,7 +87,6 @@ export function crearGestos({
   let saludoCooldownHasta = 0;
   let corazonHasta = 0;
   // pellizco
-  let ultimoScroll = 0;
   let pinchStart = 0;
   let pinchProgress = 0;
   let pinchPerdidoDesde = 0;
@@ -132,11 +120,9 @@ export function crearGestos({
     const visibles = tracks.filter((t) => !t.perdida);
     const n = contarEstable(visibles.length, ahora);
     const nOpciones = getOpciones() || 0;
-    const seleccion = !!getSeleccionActiva();
-    const modo = nOpciones ? 'opciones' : seleccion ? 'lista' : '';
+    const modo = nOpciones ? 'opciones' : '';
     if (modo !== modoPrevio) {
       reiniciarPellizco();
-      ultimoScroll = ahora; // no scrollea de golpe al empezar
       modoPrevio = modo;
     }
 
@@ -186,7 +172,6 @@ export function crearGestos({
       corazon,
       pellizco: false,
       pinchProgress: 0,
-      zonaScroll: null,
       opcionSel: -1,
     };
 
@@ -202,28 +187,21 @@ export function crearGestos({
     const tam = d(kp[0], kp[9]) || 1;
     const pellizco = d(kp[4], kp[8]) / tam < UMBRAL_PELLIZCO;
     const c = centroPalma(kp);
-    const zona = c.y < ZONA_SCROLL ? 'arriba' : c.y > 1 - ZONA_SCROLL ? 'abajo' : null;
     let opcionSel = -1;
 
-    if (modo === 'lista') {
-      if (zona && ahora - ultimoScroll > MS_SCROLL) {
-        ultimoScroll = ahora;
-        onScroll?.(zona);
-      }
-    } else if (modo === 'opciones') {
+    if (modo === 'opciones') {
       opcionSel = Math.min(nOpciones - 1, Math.max(0, Math.floor(c.x * nOpciones)));
     }
 
     if (modo) {
-      const msNecesarios = modo === 'opciones' ? MS_CONFIRMAR_OPCION : MS_CONFIRMAR;
-      if (pellizco && (modo !== 'opciones' || opcionPinch < 0 || opcionPinch === opcionSel)) {
+      const msNecesarios = MS_CONFIRMAR_OPCION;
+      if (pellizco && (opcionPinch < 0 || opcionPinch === opcionSel)) {
         if (!pinchStart) { pinchStart = ahora; opcionPinch = opcionSel; }
         pinchPerdidoDesde = 0;
         pinchProgress = Math.min(1, (ahora - pinchStart) / msNecesarios);
         if (pinchProgress >= 1 && !confirmEnviado) {
           confirmEnviado = true;
-          if (modo === 'opciones') onOpcion?.(opcionPinch);
-          else onConfirmar?.();
+          onOpcion?.(opcionPinch);
         }
       } else if (pellizco) {
         // cambio de opcion en pleno pellizco: empieza de nuevo sobre la nueva
@@ -240,7 +218,6 @@ export function crearGestos({
       ...base,
       pellizco,
       pinchProgress: modo ? pinchProgress : 0,
-      zonaScroll: modo === 'lista' ? zona : null,
       opcionSel,
     });
   };

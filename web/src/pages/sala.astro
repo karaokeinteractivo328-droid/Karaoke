@@ -58,16 +58,29 @@ import Base from '../layouts/Base.astro';
         <p class="chico" id="filaAhora"></p>
       </div>
       <div class="tarjeta" data-selector>
-        <p class="kicker">tu canción · cualquiera sirve solo o a dúo</p>
-        <p class="grandeTxt" id="filaCancion">Todavía no elegiste</p>
+        <p class="kicker">🎵 ¿qué querés cantar?</p>
+        <div class="audioEstado" data-audio-estado hidden>
+          <p class="audioTxt"></p>
+          <p class="chico audioMotivo"></p>
+          <div class="audioBtns" hidden>
+            <button class="boton chicoBtn" data-audio-reintentar>↻ Reintentar</button>
+            <button class="link" data-audio-cambiar>Elegir otra canción</button>
+          </div>
+        </div>
         <p class="kicker">¿cómo la cantás?</p>
         <div class="modo">
           <button data-modo="solo">🎤 Solo</button>
           <button data-modo="duo">👥 Dúo</button>
         </div>
         <p class="chico" data-modo-ayuda></p>
-        <input class="buscar" type="search" placeholder="Buscar canción o artista" autocomplete="off" />
+        <input class="buscar" type="search" placeholder="Buscá por artista o título" autocomplete="off" enterkeyhint="search" />
+        <p class="chico buscarEstado" data-buscar-estado></p>
         <ul class="canciones"></ul>
+        <div class="buscarError" data-buscar-error hidden>
+          <p class="error"></p>
+          <button class="boton chicoBtn" data-buscar-reintentar>↻ Reintentar</button>
+        </div>
+        <button class="link" data-buscar-mas hidden>Ver más canciones</button>
       </div>
       <div class="tarjeta" id="boxCodigo" hidden>
         <p class="kicker">invitar copiloto 🤝</p>
@@ -87,17 +100,31 @@ import Base from '../layouts/Base.astro';
         <p class="chico" id="turnoAyuda"></p>
         <div class="barra" id="turnoBarra"><span></span></div>
       </div>
-      <button id="btnListo" class="boton" hidden>▶ Empezar desde el celu</button>
+      <button id="btnListo" class="boton" disabled>⏳ Preparando el audio…</button>
       <div class="tarjeta" data-selector>
-        <p class="kicker">cambiar canción</p>
+        <p class="kicker">🎵 ¿qué querés cantar?</p>
+        <div class="audioEstado" data-audio-estado hidden>
+          <p class="audioTxt"></p>
+          <p class="chico audioMotivo"></p>
+          <div class="audioBtns" hidden>
+            <button class="boton chicoBtn" data-audio-reintentar>↻ Reintentar</button>
+            <button class="link" data-audio-cambiar>Elegir otra canción</button>
+          </div>
+        </div>
         <p class="kicker">¿cómo la cantás?</p>
         <div class="modo">
           <button data-modo="solo">🎤 Solo</button>
           <button data-modo="duo">👥 Dúo</button>
         </div>
         <p class="chico" data-modo-ayuda></p>
-        <input class="buscar" type="search" placeholder="Buscar canción o artista" autocomplete="off" />
+        <input class="buscar" type="search" placeholder="Buscá por artista o título" autocomplete="off" enterkeyhint="search" />
+        <p class="chico buscarEstado" data-buscar-estado></p>
         <ul class="canciones"></ul>
+        <div class="buscarError" data-buscar-error hidden>
+          <p class="error"></p>
+          <button class="boton chicoBtn" data-buscar-reintentar>↻ Reintentar</button>
+        </div>
+        <button class="link" data-buscar-mas hidden>Ver más canciones</button>
       </div>
       <button id="btnCancelarTurno" class="link">Cancelar mi turno</button>
     </section>
@@ -258,6 +285,23 @@ import Base from '../layouts/Base.astro';
     .vozTurno { font-family: var(--fat); text-transform: uppercase; font-size: 0.95rem; letter-spacing: 0.06em; padding: 0.3rem 0.9rem; border-radius: 99px; background: var(--tinta); color: #fff; align-self: center; }
     .vozTurno.mia { background: var(--hot, #ec2f80); }
     .vozTurno[hidden] { display: none; }
+    .audioEstado { border: 3px solid var(--tinta); border-radius: 1rem; padding: 0.7rem 0.9rem; background: #fff; display: flex; flex-direction: column; gap: 0.35rem; text-align: left; }
+    .audioEstado[hidden], .audioBtns[hidden], .buscarError[hidden] { display: none; }
+    .audioEstado.lista { background: #1f9d55; color: #fff; }
+    .audioEstado.preparando { background: #fff6e0; }
+    .audioEstado.bloqueado { background: var(--hot, #ec2f80); color: #fff; }
+    .audioEstado.error { background: #b3261e; color: #fff; }
+    .audioTxt { font-family: var(--fat); text-transform: uppercase; font-size: 0.95rem; }
+    .audioBtns { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+    .audioBtns .boton { width: auto; margin: 0; background: #fff; color: var(--tinta); }
+    .audioEstado.error .link { color: #fff; opacity: 1; }
+    .buscarEstado { min-height: 1.2em; text-align: left; }
+    .buscarError { display: flex; flex-direction: column; gap: 0.5rem; align-items: stretch; }
+    .canciones :global(li.cargando) { background: linear-gradient(90deg, #eee 25%, #f8f8f8 50%, #eee 75%); background-size: 200% 100%; animation: brillo 1.2s linear infinite; color: transparent; pointer-events: none; }
+    .canciones :global(li .tagFuente) { font-size: 0.7em; font-weight: 800; border-radius: 99px; padding: 0 0.5em; margin-left: 0.4em; background: #eee; color: var(--tinta); }
+    .canciones :global(li.elegida .tagFuente) { background: rgba(255,255,255,0.3); color: #fff; }
+    @keyframes brillo { to { background-position: -200% 0; } }
+    .boton:disabled { opacity: 0.6; }
     .letraSig { font-family: var(--body); font-weight: 600; opacity: 0.55; font-size: 1rem; }
     #aviso { position: fixed; top: 0; left: 0; right: 0; z-index: 10; background: var(--tinta); color: #fff; font-family: var(--body); font-weight: 700; padding: 0.8rem 1rem; text-align: center; }
     #aviso[hidden], #sinConexion[hidden] { display: none; }

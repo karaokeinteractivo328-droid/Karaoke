@@ -739,55 +739,40 @@ body[data-estado="RESULT"]    .ui[data-estado="RESULT"] {
 #turnoFase { margin-top: 1vmin; }
 
 /* CALLING: la cancion se elige con la mano (subir/bajar + pellizcar) */
-#lista {
-  list-style: none;
-  margin-top: 1vmin;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5vmin;
-  width: 100%;
-  max-width: 92vw;
-  max-height: 46vh;
-  overflow: hidden;
-}
-#lista li {
-  font-family: var(--fat);
-  text-transform: uppercase;
-  font-size: clamp(1.2rem, 4.4vmin, 3rem);
-  line-height: 1.04;
-  letter-spacing: -0.015em;
-  color: var(--tinta);
-  opacity: 0.3;
-  transition: opacity 0.2s, transform 0.2s;
-}
-#lista li .art {
-  font-family: var(--body);
-  font-weight: 600;
-  font-size: 0.34em;
-  letter-spacing: 0.06em;
-  margin-left: 0.6em;
-  opacity: 0.7;
-}
-#lista li .prep {
-  font-family: var(--body);
-  font-size: 0.3em;
-  letter-spacing: 0.1em;
-  color: var(--rosa-hot);
-  margin-left: 0.6em;
-}
-#lista li.activa { opacity: 1; transform: scale(1.04); color: var(--rosa-hot); }
-#lista li .tag-duo { margin-left: 0.5em; }
 #turnoNombre { font-size: clamp(2rem, 8vmin, 5rem); }
-.tag-duo {
-  font-family: var(--body);
-  font-size: 0.3em;
-  letter-spacing: 0.12em;
-  color: #fff;
-  background: var(--rosa-hot);
-  border-radius: 999px;
-  padding: 0.15em 0.7em;
-  vertical-align: middle;
-}
 
 /* PLAYING: la letra arranca debajo de la pildora del cantante (antes se pisaban) */
 .ui[data-estado="PLAYING"] { padding-top: max(11vmin, 84px); }
+
+/* CALLING: la cancion que va a cantar y si su audio esta listo */
+#turnoCancion {
+  font-family: var(--fat);
+  text-transform: uppercase;
+  font-size: clamp(1.4rem, 5vmin, 3.2rem);
+  line-height: 1.05;
+  max-width: 90vw;
+}
+#turnoCancion .art { display: block; font-family: var(--body); font-weight: 700; font-size: 0.4em; opacity: 0.65; text-transform: none; margin-top: 0.3em; }
+#turnoFase { font-family: var(--body); font-weight: 800; font-size: clamp(1rem, 2.6vmin, 1.6rem); padding: 0.4rem 1rem; border-radius: 999px; background: var(--crema); border: 2px solid var(--tinta); }
+#turnoFase[data-audio="lista"] { background: #1f9d55; color: #fff; border-color: var(--tinta); }
+#turnoFase[data-audio="error"] { background: #b3261e; color: #fff; }
+#turnoFase[data-audio="bloqueado"] { background: var(--rosa-hot); color: #fff; }
+
+/* sonido bloqueado por el navegador: tapa todo hasta que se toca la pantalla */
+#sonidoOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: rgba(22, 21, 19, 0.9);
+  color: var(--crema);
+  cursor: pointer;
+}
+#sonidoOverlay[hidden] { display: none; }
+#sonidoOverlay b { font-size: clamp(4rem, 18vmin, 10rem); display: block; animation: latidoSonido 1.4s ease-in-out infinite; }
+#sonidoOverlay p { font-family: var(--fat); text-transform: uppercase; font-size: clamp(1.6rem, 6vmin, 4rem); margin-top: 1rem; }
+#sonidoOverlay small { font-family: var(--body); font-weight: 600; opacity: 0.7; font-size: clamp(0.9rem, 2.4vmin, 1.4rem); }
+@keyframes latidoSonido { 50% { transform: scale(1.12); } }

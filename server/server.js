@@ -13,6 +13,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import { crearCatalogo } from './catalogo.js';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { readFile, mkdir, writeFile, rm, rename, stat, readdir } from 'node:fs/promises';
@@ -117,6 +118,26 @@ const escenario = crearEscenario({
   },
 });
 
+// --- Catalogo, busqueda y preparacion del audio ------------------------------
+// Ver server/catalogo.js: lrclib (metadata + letra) + biblioteca local + resolvedor a pedido.
+const DIR_CACHE = process.env.CACHE_AUDIO_DIR || join(__dirname, 'cache-audio');
+await mkdir(DIR_CACHE, { recursive: true }).catch(() => {});
+const catalogo = crearCatalogo({
+  canciones,
+  dirLocal: __dirname,
+  dirCache: DIR_CACHE,
+  ffmpeg: ffmpegPath || 'ffmpeg',
+  log: (m) => console.log(m),
+  config: { YTDLP: process.env.AUDIO_REMOTO === '0' ? 'off' : process.env.YTDLP },
+  // cada vez que el server termina (o falla) de preparar un audio, el escenario lo sabe
+  onEstadoAudio: (id, estado, motivo) => escenario.audioServidorEstado(id, estado, motivo),
+  enUso: () => escenario.cancionesEnUso(),
+});
+await catalogo.detectar();
+// la biblioteca local se valida (decodifica / no es silencio) apenas arranca: asi
+// "lista" significa lista, no "existe un archivo"
+for (const c of canciones) catalogo.asegurarAudio(c.id);
+
 // El watchdog: una vez por segundo hace avanzar timeouts, gracias de
 // reconexion, countdown y abandonos. Es lo que hace que nunca se trabe.
 setInterval(() => {
@@ -128,8 +149,48 @@ setInterval(() => {
 }, 1000);
 
 // --- API -----------------------------------------------------------------
-app.get('/api/canciones', (_req, res) => res.json(canciones));
+app.get('/api/canciones', (_req, res) => res.json(canciones.filter((c) => c.origen !== 'remoto')));
 app.use('/canciones', express.static(join(__dirname, 'canciones')));
+// audio y letras que el server bajo a pedido (Range + CORS: el navegador puede hacer currentTime/seek)
+app.use('/cache-audio', express.static(DIR_CACHE, { acceptRanges: true, maxAge: '1h' }));
+
+// tope por IP para no dejar que un celu roto (o curioso) haga trabajar de mas al server y a lrclib
+const golpes = new Map();
+function limitar(maxPorVentana, ventanaMs) {
+  return (req, res, next) => {
+    const k = `${req.ip}|${req.path}`;
+    const ahora = Date.now();
+    const g = golpes.get(k) || { desde: ahora, n: 0 };
+    if (ahora - g.desde > ventanaMs) { g.desde = ahora; g.n = 0; }
+    g.n++;
+    golpes.set(k, g);
+    if (golpes.size > 5000) golpes.clear();
+    if (g.n > maxPorVentana) return res.status(429).json({ error: 'Demasiadas búsquedas seguidas, esperá un segundo' });
+    next();
+  };
+}
+
+// 🎵 buscar canciones: biblioteca local + catalogo online (solo lo que realmente se puede reproducir)
+app.get('/api/buscar', limitar(12, 5000), async (req, res) => {
+  try {
+    res.json(await catalogo.buscar(String(req.query.q || ''), Number(req.query.pagina) || 0));
+  } catch (e) {
+    console.error('[buscar]', e);
+    res.status(500).json({ error: 'No se pudo buscar' });
+  }
+});
+
+// meta completa de una cancion + estado de su audio (la pantalla la usa para precargar)
+app.get('/api/cancion/:id', limitar(60, 10_000), async (req, res) => {
+  try {
+    await catalogo.resolver(req.params.id);
+    const m = catalogo.metaPublica(req.params.id);
+    if (!m) return res.status(404).json({ error: 'cancion desconocida' });
+    res.json(m);
+  } catch (e) {
+    res.status(404).json({ error: String(e.message || e) });
+  }
+});
 
 app.get('/api/leaderboard', async (_req, res) => {
   res.json(await obtenerLeaderboard(10));
@@ -139,7 +200,14 @@ app.get('/api/leaderboard', async (_req, res) => {
 // de un vistazo si el escenario esta vivo.
 app.get('/healthz', (_req, res) => {
   const s = escenario.snapshot();
-  res.json({ ok: true, etapa: s.etapa, fila: s.filaTotal, pantalla: s.pantalla, uptime: Math.round(process.uptime()) });
+  res.json({
+    ok: true,
+    etapa: s.etapa,
+    fila: s.filaTotal,
+    pantalla: s.pantalla,
+    audio: { resolvedorRemoto: catalogo.remoto, detalle: catalogo.motivoCapacidad },
+    uptime: Math.round(process.uptime()),
+  });
 });
 
 // --- Grabaciones: la pantalla sube el .webm, el server lo pasa a .mp4 con
@@ -399,6 +467,21 @@ io.on('connection', (socket) => {
     tokenPorSocket.set(socket.id, token);
     if (!socketsPorToken.has(token)) socketsPorToken.set(token, new Set());
     socketsPorToken.get(token).add(socket.id);
+    // tras un reinicio el catalogo online esta vacio: si el celu estaba esperando con una cancion
+    // de ahi, se vuelve a registrar y a preparar en segundo plano (sin frenar la reconexion)
+    const idc = datos.intencion?.cancionId;
+    if (typeof idc === 'string' && /^lrclib-\d+$/.test(idc) && !canciones.some((c) => c.id === idc)) {
+      catalogo
+        .resolver(idc)
+        .then(() => {
+          const y = escenario.yo(token);
+          if (y && !y.cancionId && (y.estado === 'QUEUED' || y.estado === 'CALLED')) {
+            escenario.elegirCancion(token, idc, datos.intencion?.modo);
+            catalogo.asegurarAudio(idc);
+          }
+        })
+        .catch((e) => console.warn(`[SONG] no se pudo restablecer ${idc}: ${e.message}`));
+    }
     socket.emit('yo', escenario.yo(token));
     if (ultimaLetra) socket.emit('letra', ultimaLetra);
     return { ok: true, yo: escenario.yo(token) };
@@ -423,13 +506,49 @@ io.on('connection', (socket) => {
     const token = tokenPorSocket.get(socket.id);
     if (!token) return cb?.({ ok: false, error: 'Sin sesión: recargá la página' });
     const r = fn(token);
+    // admite acciones asincronas (ej. registrar una cancion online antes de elegirla)
+    if (r && typeof r.then === 'function') {
+      r.then((x) => cb?.(x)).catch((e) => {
+        console.error('[intent]', e);
+        cb?.({ ok: false, error: 'No se pudo completar la acción' });
+      });
+      return;
+    }
     cb?.(r);
   };
 
   socket.on('fila:entrar', ({ nombre, modo } = {}, cb) => intent(cb, (t) => escenario.entrarFila(t, nombre, modo)));
   socket.on('fila:salir', (_d, cb) => intent(cb, (t) => escenario.salirFila(t)));
   socket.on('modo:elegir', ({ modo } = {}, cb) => intent(cb, (t) => escenario.elegirModo(t, modo)));
-  socket.on('cancion:elegir', ({ cancionId, modo } = {}, cb) => intent(cb, (t) => escenario.elegirCancion(t, cancionId, modo)));
+  // Elegir cancion: se registra (si es del catalogo online), se elige, y de INMEDIATO empieza a
+  // prepararse el audio (no cuando le toque el turno).
+  socket.on('cancion:elegir', ({ cancionId, modo } = {}, cb) =>
+    intent(cb, async (t) => {
+      try {
+        await catalogo.resolver(String(cancionId || ''));
+      } catch (e) {
+        console.warn(`[SONG] no se pudo registrar ${cancionId}: ${e.message}`);
+        return { ok: false, error: 'No se pudo cargar esa canción. Probá con otra.' };
+      }
+      const r = escenario.elegirCancion(t, cancionId, modo);
+      if (r.ok) {
+        console.log(`[SONG] canción seleccionada: ${cancionId}`);
+        catalogo.asegurarAudio(cancionId);
+      }
+      return r;
+    })
+  );
+  // reintentar el audio roto: se vuelve a pedir al server y la pantalla lo vuelve a cargar
+  socket.on('audio:reintentar', (_d, cb) =>
+    intent(cb, (t) => {
+      const r = escenario.audioReintentar(t);
+      if (r.ok) {
+        catalogo.reintentar(r.cancionId);
+        io.emit('audio:reintentar', { cancionId: r.cancionId });
+      }
+      return r;
+    })
+  );
   socket.on('turno:listo', (_d, cb) => intent(cb, (t) => escenario.listo(t)));
   socket.on('cantante:terminar', (_d, cb) => intent(cb, (t) => escenario.terminar(t)));
   socket.on('reto:responder', (d = {}, cb) => intent(cb, (t) => escenario.responderReto(t, d)));
@@ -459,7 +578,9 @@ io.on('connection', (socket) => {
   socket.on('pantalla:videoError', soloPantalla(({ token } = {}) => { if (idOk(token) && videoTokens.has(token)) videoErrores.set(token, 'subida'); }));
   socket.on('pantalla:fin', soloPantalla(({ progreso } = {}) => escenario.pantallaFin({ progreso: Number(progreso) })));
   // la cancion se confirma con la mano, en el escenario
-  socket.on('pantalla:confirmar', soloPantalla(({ cancionId } = {}) => escenario.pantallaConfirmar({ cancionId })));
+  // la pantalla es la que suena: ella dice si el audio realmente cargo / se puede reproducir
+  socket.on('pantalla:audio', soloPantalla((d = {}) => escenario.pantallaAudio(d)));
+  socket.on('pantalla:audioFallo', soloPantalla((d = {}) => escenario.pantallaAudioFallo(d)));
   socket.on('pantalla:reiniciar', soloPantalla(() => escenario.reinicioSeguro()));
   // la linea de letra actual, para el teleprompter del copiloto
   socket.on('pantalla:letra', soloPantalla(({ actual, siguiente, voz } = {}) => {

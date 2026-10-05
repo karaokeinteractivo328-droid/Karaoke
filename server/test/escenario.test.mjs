@@ -20,7 +20,7 @@ function mundo(config = {}) {
     ahora: () => t,
     onCambio: () => { cambios++; },
     onResultado: (r) => resultados.push(r),
-    config,
+    config: { AUDIO_REQUERIDO: false, ...config }, // el audio se prueba aparte (ver mas abajo)
   });
   const avanzar = (ms) => {
     // avanza el reloj de a 1s llamando al watchdog, como hace el server
@@ -42,8 +42,8 @@ function mundo(config = {}) {
 
 // lleva a `token` de CALLING a PLAYING
 function aEscenario(m, token, cancionId = 'a') {
-  m.e.elegirCancion(token, cancionId, 'solo'); // la deja preparada desde el celu
-  assert.equal(m.e.pantallaConfirmar({ cancionId }).ok, true); // y la confirma con la mano
+  m.e.elegirCancion(token, cancionId, 'solo'); // la elige desde el celu
+  assert.equal(m.e.listo(token).ok, true); // y toca LISTO (la pantalla NO sirve para elegir)
   m.avanzar(m.e.config.COUNTDOWN_S * 1000);
   assert.equal(m.e.etapa, ETAPAS.PLAYING);
 }
@@ -60,9 +60,9 @@ test('caso 1: llego y nadie canta -> soy el primero, elijo, canto, resultado, vu
   assert.equal(m.e.etapa, ETAPAS.CALLING);
   m.e.elegirCancion(iara, 'a', 'solo');
   assert.equal(m.e.snapshot().actual.preparada, true);
-  assert.equal(m.e.snapshot().actual.fase, 'eligiendo', 'sigue pendiente la confirmacion con la mano');
-  assert.equal(m.e.pantallaConfirmar({ cancionId: 'zzz' }).ok, false, 'cancion inexistente');
-  assert.equal(m.e.pantallaConfirmar({ cancionId: 'a' }).ok, true, 'la mano confirma');
+  assert.equal(m.e.snapshot().actual.fase, 'eligiendo', 'sigue pendiente el LISTO del celu');
+  assert.equal(m.e.elegirCancion(iara, 'zzz').ok, false, 'cancion inexistente');
+  assert.equal(m.e.listo(iara).ok, true, 'el celu confirma con LISTO');
   assert.equal(m.e.etapa, ETAPAS.COUNTDOWN);
   m.avanzar(3000);
   assert.equal(m.e.etapa, ETAPAS.PLAYING);
@@ -104,8 +104,8 @@ test('caso 3: quiero ser el proximo -> elijo cancion ya y queda preparada', () =
   assert.equal(m.e.snapshot().actual.nombre, 'B');
   assert.equal(m.e.snapshot().actual.cancion.id, 'c');
   assert.equal(m.e.snapshot().actual.modo, 'duo');
-  assert.equal(m.e.snapshot().actual.preparada, true, 'la cancion llega preparada: solo la confirma con la mano');
-  assert.equal(m.e.pantallaConfirmar({ cancionId: 'c' }).ok, true);
+  assert.equal(m.e.snapshot().actual.preparada, true, 'la cancion llega preparada: solo toca LISTO');
+  assert.equal(m.e.listo(b).ok, true);
 });
 
 test('caso 4: el primero pierde conexion -> gracia, si vuelve retoma, si no se libera', () => {
@@ -375,38 +375,171 @@ test('recuperacion: camara sana y nadie en cuadro -> abandono; sin camara no se 
   assert.equal(m2.e.etapa, ETAPAS.PLAYING, 'sin camara no se abandona por falta de persona');
 });
 
-test('mano principal, celu de respaldo: el LISTO del celu solo vale sin camara o pasados unos segundos', () => {
-  const m = mundo();
-  const a = m.persona(1, 'A');
-  m.e.pantallaConectada({ camara: true });
-  m.e.entrarFila(a);
-  m.e.elegirCancion(a, 'a');
-  m.e.pantallaPresencia(true); // la camara esta sana y viendo
-  assert.equal(m.e.listo(a).ok, false, 'con camara sana hay que usar la mano');
-  assert.match(m.e.listo(a).error, /mano/);
-  assert.ok(m.e.yo(a).listoCeluDesde > m.t);
-  m.avanzar(m.e.config.LISTO_CELU_DESPUES_MS - 1000);
-  m.e.pantallaPresencia(true);
-  assert.equal(m.e.listo(a).ok, false);
-  m.avanzar(2000);
-  m.e.pantallaPresencia(true);
-  assert.equal(m.e.listo(a).ok, true, 'pasados los segundos, el celu empieza (nunca se traba)');
-
-  const m2 = mundo();
-  const b = m2.persona(1, 'B');
-  m2.e.pantallaConectada({ camara: false });
-  m2.e.entrarFila(b);
-  m2.e.elegirCancion(b, 'a');
-  assert.equal(m2.e.listo(b).ok, true, 'sin camara el celu empieza de una');
+test('LISTO es del celu y no depende de la camara ni de ningun gesto', () => {
+  for (const camara of [true, false]) {
+    const m = mundo();
+    const a = m.persona(1, 'A');
+    m.e.pantallaConectada({ camara });
+    m.e.entrarFila(a);
+    m.e.elegirCancion(a, 'a');
+    m.e.pantallaPresencia(true);
+    assert.equal(m.e.listo(a).ok, true, `camara=${camara}: el celu empieza de una`);
+  }
 });
 
-test('nadie mas que la pantalla primaria confirma con la mano (server.js lo filtra) y solo en CALLING', () => {
+test('la pantalla NO elige canciones: ya no existe la confirmacion con la mano', () => {
   const m = mundo();
-  assert.equal(m.e.pantallaConfirmar({ cancionId: 'a' }).ok, false, 'sin nadie llamado no hay nada que confirmar');
+  assert.equal(typeof m.e.pantallaConfirmar, 'undefined');
+  assert.equal('listoCeluDesde' in m.e.yo(m.persona(1)), false);
+});
+
+// ------------------------------------------------------------------- AUDIO
+// "lista" = el server la tiene y la valido + la pantalla la cargo + el sonido esta habilitado
+function mundoAudio(config = {}) {
+  const m = mundo({ AUDIO_REQUERIDO: true, ...config });
+  m.e.pantallaConectada({ camara: true, mic: true, audio: true });
+  return m;
+}
+
+test('audio: no se puede empezar con el audio a medio preparar ni "porque hay una URL"', () => {
+  const m = mundoAudio();
   const a = m.persona(1, 'A');
   m.e.entrarFila(a);
-  aEscenario(m, a);
-  assert.equal(m.e.pantallaConfirmar({ cancionId: 'b' }).ok, false, 'ya esta cantando');
+  m.e.elegirCancion(a, 'a');
+  assert.equal(m.e.yo(a).audio.estado, 'preparando');
+  assert.equal(m.e.listo(a).ok, false);
+  assert.match(m.e.listo(a).error, /preparando/);
+  m.e.audioServidorEstado('a', 'lista'); // el server la bajo y la valido...
+  assert.equal(m.e.listo(a).ok, false, '...pero la pantalla todavia no la cargo en su navegador');
+  assert.equal(m.e.yo(a).audio.etapa, 'pantalla');
+  m.e.pantallaAudio({ cancionId: 'a', estado: 'lista' });
+  assert.equal(m.e.yo(a).audio.estado, 'lista');
+  assert.equal(m.e.listo(a).ok, true);
+  assert.equal(m.e.etapa, ETAPAS.COUNTDOWN);
+});
+
+test('audio: el sonido de la pantalla bloqueado (autoplay) impide arrancar y se explica', () => {
+  const m = mundoAudio();
+  const a = m.persona(1, 'A');
+  m.e.entrarFila(a);
+  m.e.elegirCancion(a, 'a');
+  m.e.audioServidorEstado('a', 'lista');
+  m.e.pantallaAudio({ cancionId: 'a', estado: 'lista' });
+  m.e.pantallaSalud({ audio: false }); // el AudioContext esta suspendido
+  assert.equal(m.e.yo(a).audio.estado, 'bloqueado');
+  const r = m.e.listo(a);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /activar el sonido/);
+  m.e.pantallaSalud({ audio: true }); // alguien toco la pantalla / modo kiosco
+  assert.equal(m.e.listo(a).ok, true);
+});
+
+test('audio: si falla se dice por que, se puede reintentar y cambiar de cancion', () => {
+  const m = mundoAudio();
+  const a = m.persona(1, 'A');
+  m.e.entrarFila(a);
+  m.e.elegirCancion(a, 'a');
+  m.e.audioServidorEstado('a', 'error', 'no hay una version cuya duracion coincida');
+  const y = m.e.yo(a).audio;
+  assert.equal(y.estado, 'error');
+  assert.match(y.motivo, /duracion/);
+  assert.match(m.e.listo(a).error, /No se pudo preparar el audio/);
+  // reintentar: se descarta lo que se sabia y vuelve a prepararse
+  assert.equal(m.e.audioReintentar(a).cancionId, 'a');
+  assert.equal(m.e.yo(a).audio.estado, 'preparando');
+  // cambiar de cancion: el estado es el de la nueva
+  m.e.audioServidorEstado('b', 'lista');
+  m.e.pantallaAudio({ cancionId: 'b', estado: 'lista' });
+  m.e.elegirCancion(a, 'b');
+  assert.equal(m.e.yo(a).audio.estado, 'lista');
+  assert.equal(m.e.listo(a).ok, true);
+});
+
+test('audio: el error de la pantalla (no decodifica / play rechazado) tambien cuenta como error', () => {
+  const m = mundoAudio();
+  const a = m.persona(1, 'A');
+  m.e.entrarFila(a);
+  m.e.elegirCancion(a, 'a');
+  m.e.audioServidorEstado('a', 'lista');
+  m.e.pantallaAudio({ cancionId: 'a', estado: 'error', motivo: 'el navegador no pudo decodificar el audio' });
+  assert.equal(m.e.yo(a).audio.estado, 'error');
+  assert.equal(m.e.listo(a).ok, false);
+});
+
+test('audio: quien esta llamado no pierde el turno mientras el audio se prepara (hasta un limite)', () => {
+  const m = mundoAudio({ AUDIO_ESPERA_MS: 100_000 });
+  const a = m.persona(1, 'A');
+  m.e.entrarFila(a);
+  m.e.elegirCancion(a, 'a');
+  m.avanzar(m.e.config.LLAMADO_MS + 20_000); // paso el tiempo normal de llamado
+  assert.equal(m.e.etapa, ETAPAS.CALLING, 'sigue llamado: el audio todavia se esta preparando');
+  assert.equal(m.e.yo(a).estado, 'CALLED');
+  m.avanzar(40_000); // paso el limite de espera
+  assert.equal(m.e.etapa, ETAPAS.STANDBY, 'nunca se queda trabado: se libera');
+  assert.match(m.e.yo(a).mensaje, /audio/);
+});
+
+test('audio: con el audio roto se libera el turno y pasa el siguiente', () => {
+  const m = mundoAudio();
+  const a = m.persona(1, 'A');
+  const b = m.persona(2, 'B');
+  m.e.entrarFila(a);
+  m.e.elegirCancion(a, 'a');
+  m.e.entrarFila(b);
+  m.e.elegirCancion(b, 'b');
+  m.e.audioServidorEstado('a', 'error', 'fuente no reproducible');
+  m.e.audioServidorEstado('b', 'lista');
+  m.e.pantallaAudio({ cancionId: 'b', estado: 'lista' });
+  m.avanzar(m.e.config.LLAMADO_SIN_CANCION_MS + 1000); // A fue llamada sin cancion: tenia ese margen
+  assert.equal(m.e.snapshot().actual.nombre, 'B', 'salta a quien si tiene audio');
+  assert.equal(m.e.yo(a).audio.estado, 'error');
+  assert.match(m.e.yo(a).mensaje, /audio/);
+});
+
+test('audio: quien esta lejos en la fila ve "lista" con el archivo validado (la pantalla solo precarga al que sigue)', () => {
+  const m = mundoAudio();
+  const [a, b, c] = [1, 2, 3].map((n) => m.persona(n, `P${n}`));
+  for (const x of [a, b, c]) m.e.entrarFila(x);
+  m.e.elegirCancion(a, 'a');
+  m.e.elegirCancion(b, 'b');
+  m.e.elegirCancion(c, 'c');
+  for (const id of ['a', 'b', 'c']) m.e.audioServidorEstado(id, 'lista');
+  assert.equal(m.e.yo(c).audio.estado, 'lista', 'tercero en la fila: lista aunque la pantalla aun no la cargo');
+  assert.equal(m.e.yo(c).audio.verificadaEnPantalla, false);
+  assert.equal(m.e.yo(b).audio.estado, 'preparando', 'el que sigue si necesita que la pantalla la tenga cargada');
+  m.e.pantallaAudio({ cancionId: 'b', estado: 'lista' });
+  assert.equal(m.e.yo(b).audio.estado, 'lista');
+  // la pantalla sabe que cancion precargar
+  assert.equal(m.e.snapshot().siguiente.cancionId, 'b');
+  assert.equal(m.e.snapshot().siguiente.audio.estado, 'lista');
+});
+
+test('audio: si la pantalla no puede reproducir en plena performance se cierra, no se canta en silencio', () => {
+  const m = mundoAudio();
+  const a = m.persona(1, 'A');
+  m.e.entrarFila(a);
+  m.e.elegirCancion(a, 'a');
+  m.e.audioServidorEstado('a', 'lista');
+  m.e.pantallaAudio({ cancionId: 'a', estado: 'lista' });
+  assert.equal(m.e.listo(a).ok, true);
+  m.avanzar(m.e.config.COUNTDOWN_S * 1000);
+  assert.equal(m.e.etapa, ETAPAS.PLAYING);
+  assert.equal(m.e.pantallaAudioFallo({ motivo: 'play() rechazado' }).ok, true);
+  assert.equal(m.e.etapa, ETAPAS.RESULT);
+  const r = m.e.snapshot().actual.resultado;
+  assert.equal(r.interrumpida, true);
+  assert.match(r.motivo, /audio/i);
+  assert.equal(m.e.pantallaAudioFallo({ motivo: 'x' }).ok, false, 'fuera de una performance no hace nada');
+});
+
+test('audio: la cola protege el audio en uso (cancionesEnUso)', () => {
+  const m = mundoAudio();
+  const [a, b] = [1, 2].map((n) => m.persona(n));
+  m.e.entrarFila(a);
+  m.e.elegirCancion(a, 'a');
+  m.e.entrarFila(b);
+  m.e.elegirCancion(b, 'c');
+  assert.deepEqual([...m.e.cancionesEnUso()].sort(), ['a', 'c']);
 });
 
 test('reinicio seguro: cierra la performance y deja el sistema consistente', () => {

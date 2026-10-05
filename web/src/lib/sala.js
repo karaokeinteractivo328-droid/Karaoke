@@ -5,6 +5,7 @@
 // mandan intents tipados. La identidad es un token en localStorage, asi que
 // cerrar el navegador, perder señal o reiniciar el server no hace perder el lugar.
 import { conectar, SOCKET_URL } from './socket.js';
+import { crearBuscador } from './buscador.js';
 
 const $ = (id) => document.getElementById(id);
 const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
@@ -25,8 +26,10 @@ let yo = null; // lo mio
 let ajusteReloj = 0; // serverNow - Date.now()
 let totales = { corazon: 0, fuego: 0, aplauso: 0 };
 let letra = { actual: '', siguiente: '' };
-let canciones = [];
-let filtro = '';
+let yoReal = null; // lo que dice el server (yo puede tener cambios optimistas hasta que llegue lo real)
+let resultados = { q: '', items: [], estado: 'cargando', error: null, hayMas: false, remoto: true, total: 0, cargandoMas: false };
+// 🎵 buscador: debounce, cancelacion, paginacion y estados (ver buscador.js)
+const buscador = crearBuscador({ base: SOCKET_URL, onCambio: (e) => pintarBuscador(e) });
 let modoPendiente = null; // solo/duo elegido ANTES de anotarse (o sin que el server lo confirme todavia)
 let resultadoOculto = leer('karaoke:resultadoOculto') || '';
 let vistaPrevia = '';
@@ -67,6 +70,7 @@ socket.on('estado', (s) => {
   render();
 });
 socket.on('yo', (m) => {
+  yoReal = m;
   yo = m;
   if (m?.nombre) { nombre = m.nombre; guardar('karaoke:nombre', nombre); }
   recordarIntencion();
@@ -137,7 +141,7 @@ function etaTexto(seg, esSiguiente) {
   return `Te toca en ~${min} min`;
 }
 
-const cancionPorId = (id) => canciones.find((c) => c.id === id);
+const tituloDe = (c) => (c ? `${c.titulo}${c.artista ? ` · ${c.artista}` : ''}` : '');
 const hayPantalla = () => !!est?.pantalla?.conectada;
 
 // ------------------------------------------------------------------ vistas
@@ -251,8 +255,7 @@ function renderFila() {
   $('filaEta').textContent = etaTexto(yo.etaSeg, yo.esSiguiente);
   const a = est.actual;
   $('filaAhora').textContent = a && est.etapa !== 'STANDBY' ? `Ahora: ${a.nombre}${a.cancion ? ` · ${a.cancion.titulo}` : ''}` : '';
-  const c = cancionPorId(yo.cancionId);
-  $('filaCancion').textContent = c ? c.titulo : 'Todavía no elegiste';
+  $('filaCancion').textContent = yo.cancion ? tituloDe(yo.cancion) : 'Todavía no elegiste';
   const box = $('boxCodigo');
   box.hidden = !yo.codigoCopiloto;
   if (yo.codigoCopiloto) {
@@ -268,17 +271,21 @@ function renderFila() {
 // ------------------------------------------------------------------ TURNO
 function renderTurno() {
   if (!yo || yo.estado !== 'CALLED') return;
-  const c = cancionPorId(yo.cancionId);
   const calling = est.etapa === 'CALLING';
+  const a = yo.audio?.estado;
   $('turnoTitulo').textContent = calling ? '¡Pasá al frente!' : 'Ya casi…';
-  $('turnoCancion').textContent = c ? c.titulo : 'Elegí tu canción';
+  $('turnoCancion').textContent = yo.cancion ? tituloDe(yo.cancion) : 'Elegí tu canción';
   $('turnoAyuda').textContent = !calling
     ? 'Esperá un momento, termina la canción anterior.'
-    : !c
-      ? 'Elegila acá abajo o con la mano en la pantalla.'
-      : hayPantalla() && est.pantalla.camara
-        ? '👋 Confirmala con la mano en la pantalla: subí o bajá la mano para moverte y juntá pulgar e índice un segundo.'
-        : 'Tocá EMPEZAR para arrancar.';
+    : !yo.cancionId
+      ? 'Elegí tu canción acá abajo.'
+      : a === 'lista'
+        ? 'Parate frente a la pantalla y tocá LISTO.'
+        : a === 'error'
+          ? 'No se pudo preparar ese audio: reintentá o elegí otra canción.'
+          : a === 'bloqueado'
+            ? 'Falta activar el sonido en la pantalla (hay que tocarla una vez).'
+            : 'Se está preparando tu audio, un momento…';
 }
 
 // ----------------------------------------------------------------- CUENTA
@@ -450,8 +457,7 @@ setInterval(() => { if (retoResultado) renderReto(); }, 500);
 let firmaSelector = '';
 function renderSelectores() {
   if (!yo) return;
-  const f = filtro.trim().toLowerCase();
-  const firma = `${yo.cancionId}|${yo.modo}|${f}|${canciones.length}|${vistaPrevia}`;
+  const firma = `${yo.cancionId}|${yo.modo}|${yo.audio?.estado}|${yo.audio?.etapa}|${yo.audio?.motivo}|${vistaPrevia}`;
   if (firma === firmaSelector) return;
   firmaSelector = firma;
   const modo = yo.modo || 'solo';
@@ -463,21 +469,102 @@ function renderSelectores() {
         ? 'A dúo: vos cantás la VOZ 1 y tu compañero/a la VOZ 2 (entra con tu código de copiloto).'
         : 'Solo: cantás vos toda la canción.';
     }
+  }
+  pintarAudio();
+  pintarBuscador(resultados);
+}
+
+// Estado REAL del audio de mi cancion (no "se encontro una URL"): preparando -> lista | error
+function pintarAudio() {
+  const a = yo?.audio;
+  for (const el of document.querySelectorAll('[data-audio-estado]')) {
+    if (!yo?.cancionId || !a || a.estado === 'sin_cancion') {
+      el.hidden = true;
+      continue;
+    }
+    el.hidden = false;
+    el.className = `audioEstado ${a.estado}`;
+    const txt = el.querySelector('.audioTxt');
+    const motivo = el.querySelector('.audioMotivo');
+    const btns = el.querySelector('.audioBtns');
+    btns.hidden = a.estado !== 'error';
+    if (a.estado === 'lista') {
+      txt.textContent = '✅ Audio listo';
+      motivo.textContent = a.verificadaEnPantalla === false ? 'Se vuelve a comprobar en la pantalla cuando seas el siguiente.' : 'Ya está cargado en la pantalla.';
+    } else if (a.estado === 'bloqueado') {
+      txt.textContent = '🔇 Falta activar el sonido en la pantalla';
+      motivo.textContent = 'Hay que tocar la pantalla grande una vez (o abrirla en modo kiosco).';
+    } else if (a.estado === 'error') {
+      txt.textContent = '⚠️ No se pudo preparar el audio';
+      motivo.textContent = a.motivo || 'La fuente no se puede reproducir.';
+    } else {
+      txt.textContent = '⏳ Preparando el audio…';
+      motivo.textContent = a.etapa === 'pantalla' ? 'Cargándolo en la pantalla.' : 'Consiguiendo la canción (puede tardar unos segundos).';
+    }
+  }
+}
+
+// Resultados del buscador (loading / vacio / error / paginacion), en todas las tarjetas.
+function pintarBuscador(e) {
+  resultados = e;
+  for (const box of document.querySelectorAll('[data-selector]')) {
     const ul = box.querySelector('.canciones');
+    const estadoEl = box.querySelector('[data-buscar-estado]');
+    const errEl = box.querySelector('[data-buscar-error]');
+    const mas = box.querySelector('[data-buscar-mas]');
+    if (!ul) continue;
     ul.textContent = '';
-    for (const c of canciones) {
-      if (f && !`${c.titulo} ${c.artista}`.toLowerCase().includes(f)) continue;
+    if (e.estado === 'cargando' && !e.items.length) {
+      for (let k = 0; k < 4; k++) {
+        const li = document.createElement('li');
+        li.className = 'cargando';
+        li.textContent = 'Cargando canción';
+        ul.append(li);
+      }
+    }
+    for (const c of e.items) {
       const li = document.createElement('li');
       li.dataset.id = c.id;
-      if (c.id === yo.cancionId) li.classList.add('elegida');
+      if (c.id === yo?.cancionId) li.classList.add('elegida');
       li.textContent = c.titulo;
       const art = document.createElement('span');
       art.className = 'art';
       art.textContent = `${c.artista}${c.duracion ? ` · ${mmss(c.duracion)}` : ''}`;
+      const tag = document.createElement('span');
+      tag.className = 'tagFuente';
+      tag.textContent = c.lista ? '⚡ lista' : '☁ se prepara al elegirla';
+      art.append(tag);
       li.append(art);
       ul.append(li);
     }
+    estadoEl.textContent =
+      e.estado === 'cargando'
+        ? 'Buscando…'
+        : e.estado === 'vacio'
+          ? `No encontramos "${e.q}". Probá con otro artista o título.`
+          : e.q
+            ? `${e.total} resultado${e.total === 1 ? '' : 's'}${e.remoto ? '' : ' · la búsqueda online no está disponible en este equipo'}`
+            : 'Disponibles ahora (listas para cantar). Escribí para buscar más.';
+    errEl.hidden = !e.error;
+    errEl.querySelector('.error').textContent = e.error || '';
+    mas.hidden = !(e.estado === 'ok' && e.hayMas);
+    mas.textContent = e.cargandoMas ? 'Cargando…' : 'Ver más canciones';
   }
+}
+
+// Elegir una cancion: se marca al instante ("preparando") y el server la registra y
+// empieza a bajar/validar el audio YA, no cuando te toque el turno.
+function elegirCancion(id) {
+  if (!yo || !enFila(yo) || yo.cancionId === id) return;
+  const c = resultados.items.find((x) => x.id === id);
+  yo = { ...yo, cancionId: id, cancion: c ? { id: c.id, titulo: c.titulo, artista: c.artista } : yo.cancion, audio: { estado: 'preparando', etapa: 'servidor' } };
+  firmaSelector = '';
+  render();
+  enviar('cancion:elegir', { cancionId: id }, () => {
+    yo = yoReal; // no se pudo: volver a lo que dice el server
+    firmaSelector = '';
+    render();
+  });
 }
 
 // Solo / Dúo. Responde al instante (se marca el boton sin esperar al server) y
@@ -504,7 +591,7 @@ function elegirModo(modo) {
   }
   yo = { ...yo, modo };
   firmaSelector = '';
-  renderSelectores();
+  render();
   socket.timeout(2500).emit('modo:elegir', { modo }, (err, r) => {
     if (!err) {
       if (r && r.ok === false) mostrarAviso(r.error || 'No se pudo cambiar el modo', 5000);
@@ -518,24 +605,49 @@ function elegirModo(modo) {
 
 document.addEventListener('click', (e) => {
   const li = e.target.closest?.('.canciones li');
-  if (li) {
-    // el modo no se manda: lo que la persona eligio en Solo/Dúo ya esta guardado en el server
-    enviar('cancion:elegir', { cancionId: li.dataset.id });
+  if (li && li.dataset.id) {
+    elegirCancion(li.dataset.id);
     return;
   }
   const mb = e.target.closest?.('.modo button');
   if (mb) {
     elegirModo(mb.dataset.modo);
+    return;
   }
+  if (e.target.closest?.('[data-audio-reintentar]')) {
+    mostrarAviso('Preparando el audio de nuevo…', 3000);
+    yo = yo && { ...yo, audio: { estado: 'preparando', etapa: 'servidor' } };
+    firmaSelector = '';
+    render();
+    enviar('audio:reintentar');
+    return;
+  }
+  if (e.target.closest?.('[data-audio-cambiar]')) {
+    const input = e.target.closest('[data-selector]')?.querySelector('.buscar');
+    input?.focus();
+    input?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    return;
+  }
+  if (e.target.closest?.('[data-buscar-reintentar]')) {
+    buscador.reintentar();
+    return;
+  }
+  if (e.target.closest?.('[data-buscar-mas]')) buscador.masResultados();
 });
 
 document.addEventListener('input', (e) => {
   if (e.target.classList?.contains('buscar')) {
-    filtro = e.target.value;
-    for (const i of document.querySelectorAll('.buscar')) if (i !== e.target) i.value = filtro;
-    renderSelectores();
+    const v = e.target.value;
+    for (const i of document.querySelectorAll('.buscar')) if (i !== e.target) i.value = v;
+    buscador.consultar(v); // con debounce: no se le pega a la API por cada tecla
   }
 });
+
+// scroll infinito: al llegar casi al final de la lista se pide la pagina siguiente
+document.addEventListener('scroll', (e) => {
+  const ul = e.target;
+  if (ul?.classList?.contains?.('canciones') && ul.scrollTop + ul.clientHeight >= ul.scrollHeight - 80) buscador.masResultados();
+}, true);
 
 // -------------------------------------------------------------- reacciones
 for (const cont of document.querySelectorAll('[data-reacciones]')) {
@@ -618,8 +730,20 @@ function refrescarTimers() {
     const total = Math.max(1, a.llamadoHasta - a.llamadoDesde);
     const resta = Math.max(0, a.llamadoHasta - t);
     $('turnoBarra').firstElementChild.style.width = `${(resta / total) * 100}%`;
-    const respaldo = !est.pantalla?.camara || !hayPantalla() || (yo.listoCeluDesde && t >= yo.listoCeluDesde);
-    $('btnListo').hidden = !(respaldo && yo.cancionId);
+    // LISTO solo cuando el audio REALMENTE esta listo (existe + cargo + se puede reproducir)
+    const au = yo.audio?.estado;
+    const btn = $('btnListo');
+    btn.hidden = false;
+    btn.disabled = au !== 'lista' || !yo.cancionId;
+    btn.textContent = !yo.cancionId
+      ? '🎵 Elegí una canción'
+      : au === 'lista'
+        ? '▶ ¡LISTO!'
+        : au === 'error'
+          ? '⚠️ Reintentá o elegí otra canción'
+          : au === 'bloqueado'
+            ? '🔇 Esperando el sonido de la pantalla'
+            : '⏳ Preparando el audio…';
   } else {
     $('btnListo').hidden = true;
   }
@@ -652,16 +776,4 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---------------------------------------------------------------- canciones
-(async function cargarCanciones() {
-  for (let i = 0; i < 5; i++) {
-    try {
-      const r = await fetch(`${SOCKET_URL}/api/canciones`);
-      canciones = await r.json();
-      firmaSelector = '';
-      render();
-      return;
-    } catch {
-      await new Promise((ok) => setTimeout(ok, 2000 * (i + 1)));
-    }
-  }
-})();
+buscador.iniciar(); // arranca con la biblioteca local (lo que se puede cantar ya)

@@ -31,6 +31,7 @@ const ENV = {
     RESULT_MS: 3000,
     RESULT_INTERRUMPIDO_MS: 1500,
     CALLED_DESCONEXION_MS: 4000,
+      AUDIO_REQUERIDO: false, // el audio real se prueba en integracion3.mjs
   }),
 };
 

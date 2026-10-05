@@ -17,6 +17,7 @@ function mundo() {
     canciones: CANCIONES,
     ahora: () => t,
     onRetoResultado: (r) => retosRes.push(r),
+    config: { AUDIO_REQUERIDO: false },
   });
   const avanzar = (ms) => {
     let resto = ms;
@@ -36,7 +37,7 @@ function mundo() {
 
 function aEscenario(m, token) {
   m.e.elegirCancion(token, 'a', 'solo');
-  assert.equal(m.e.pantallaConfirmar({ cancionId: 'a' }).ok, true);
+  assert.equal(m.e.listo(token).ok, true);
   m.avanzar(m.e.config.COUNTDOWN_S * 1000);
   assert.equal(m.e.etapa, ETAPAS.PLAYING);
 }
@@ -231,7 +232,7 @@ test('dueto: CUALQUIER cancion se puede cantar solo o a dueto, lo elige la perso
   assert.equal(m.e.yo(a).modo, 'duo');
 });
 
-test('dueto: llega a PLAYING en modo dueto (celu y mano) y se ve el compañero', () => {
+test('dueto: llega a PLAYING en modo dueto (LISTO del celu) y se ve el compañero', () => {
   const m = mundo();
   const a = m.persona(1, 'Ana');
   const c = m.persona(2, 'Compa');
@@ -239,7 +240,7 @@ test('dueto: llega a PLAYING en modo dueto (celu y mano) y se ve el compañero',
   m.e.unirseCopiloto(c, m.e.yo(a).codigoCopiloto);
   m.e.elegirCancion(a, 'a');
   m.e.elegirModo(a, 'duo'); // dueto con una cancion comun (no marcada como dueto)
-  assert.equal(m.e.pantallaConfirmar({ cancionId: 'a' }).ok, true); // confirmada con la mano
+  assert.equal(m.e.listo(a).ok, true); // LISTO desde el celu
   assert.equal(m.e.snapshot().actual.modo, 'duo');
   m.avanzar(m.e.config.COUNTDOWN_S * 1000);
   assert.equal(m.e.etapa, ETAPAS.PLAYING);
@@ -255,7 +256,7 @@ test('dueto: el modo se puede cambiar en CALLING pero no una vez que arranco', (
   assert.equal(m.e.elegirModo(a, 'duo').ok, true);
   assert.equal(m.e.snapshot().actual.modo, 'duo');
   m.e.elegirCancion(a, 'a');
-  m.e.pantallaConfirmar({ cancionId: 'a' });
+  m.e.listo(a);
   assert.equal(m.e.elegirModo(a, 'solo').ok, false, 'ya empezo');
   assert.equal(m.e.elegirModo(a, 'trio').ok, false, 'modo invalido');
 });

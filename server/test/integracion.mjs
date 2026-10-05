@@ -23,6 +23,7 @@ const server = spawn(process.execPath, [join(dir, '..', 'server.js')], {
       RESULT_MS: 2000,
       RESULT_INTERRUMPIDO_MS: 1500,
       CALLED_DESCONEXION_MS: 1500,
+      AUDIO_REQUERIDO: false, // el audio real se prueba en integracion3.mjs
         }),
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -90,7 +91,7 @@ try {
   ok(pantalla.estado.actual?.preparada === true, 'la pantalla sabe que dejó una canción preparada');
   const hand = await iara.emitAck('turno:listo', {});
   ok(hand.ok, 'sin cámara sana, el celu puede empezar (respaldo)');
-  // (en el flujo normal la confirma la mano: pantalla:confirmar)
+  // (el LISTO es siempre del celu: la pantalla no elige ni confirma canciones)
   await hasta(() => pantalla.estado?.etapa === 'PLAYING', 4000, 'PLAYING');
   ok(pantalla.estado?.etapa === 'PLAYING', 'COUNTDOWN -> PLAYING solo');
   ok(!!pantalla.estado?.privado, 'la pantalla primaria recibe datos privados');
@@ -142,10 +143,12 @@ try {
   ok(iara.yo?.estado === 'DONE' && !!iara.yo?.videoToken, 'Iara ve su resultado y tiene su link de video privado');
   await hasta(() => pantalla.estado?.etapa === 'CALLING', 4000, 'siguiente llamado');
   ok(pantalla.estado.actual?.nombre === orden[0], 'pasa automáticamente al siguiente (ya tenía canción)');
-  ok(pantalla.estado.actual.preparada === true && pantalla.estado.actual.cancion?.id === 'baby', 'su canción ya estaba preparada (la confirma con la mano)');
-  pantalla.emit('pantalla:confirmar', { cancionId: 'baby' });
-  await hasta(() => ['COUNTDOWN', 'PLAYING'].includes(pantalla.estado?.etapa), 2000, 'arranca con la mano');
-  ok(['COUNTDOWN', 'PLAYING'].includes(pantalla.estado.etapa), 'la mano en la pantalla confirma y arranca');
+  ok(pantalla.estado.actual.preparada === true && pantalla.estado.actual.cancion?.id === 'baby', 'su canción ya estaba preparada (solo toca LISTO)');
+  const siguienteCelu = orden[0] === 'Yazmín' ? yaz : roc;
+  const listoSig = await siguienteCelu.emitAck('turno:listo', {});
+  ok(listoSig.ok, 'el celu del siguiente toca LISTO');
+  await hasta(() => ['COUNTDOWN', 'PLAYING'].includes(pantalla.estado?.etapa), 2000, 'arranca');
+  ok(['COUNTDOWN', 'PLAYING'].includes(pantalla.estado.etapa), 'arranca la performance siguiente sin volver a STANDBY');
   await hasta(() => pantalla.estado?.etapa === 'PLAYING', 3000, 'PLAYING 2');
   pantalla.emit('pantalla:fin', { progreso: 1 });
   await hasta(() => pantalla.estado?.etapa === 'RESULT', 2000, 'RESULT 2');

@@ -8,6 +8,12 @@
 //  B) PARTICIPANTE (uno por persona, identificado por un token que guarda su
 //     celu):  PUBLIC -> QUEUED -> CALLED -> SINGING -> DONE -> (QUEUED ...)
 //
+//  C) AUDIO de cada cancion elegida (preparando -> lista | error). "Lista" NO es
+//     "se encontro una URL": significa que el server tiene el archivo y lo
+//     valido (decodifica, dura lo que debe, no es silencio) Y que la PANTALLA
+//     (que es la que suena) lo descargo, lo decodifico en su navegador y tiene
+//     el sonido habilitado. Nunca se empieza una performance sin eso.
+//
 // Todo el modulo es determinista: no usa setTimeout. Lo unico que hace avanzar
 // el tiempo es `tick()` (el server lo llama una vez por segundo, el "watchdog")
 // y el reloj `ahora()` se inyecta, asi los tests no esperan tiempos reales.
@@ -31,9 +37,10 @@ export const ESTADOS_P = Object.freeze({
 });
 
 export const CONFIG_BASE = Object.freeze({
-  LLAMADO_MS: 60_000, // tiempo para confirmar la cancion con la mano (si ya la dejo preparada)
+  LLAMADO_MS: 60_000, // tiempo para tocar LISTO en el celu (si ya tenia cancion elegida)
   LLAMADO_SIN_CANCION_MS: 90_000, // si ademas la tiene que buscar desde cero
-  LISTO_CELU_DESPUES_MS: 20_000, // respaldo: tras esto el celu tambien puede empezar
+  AUDIO_REQUERIDO: true, // no se empieza sin audio listo (los tests lo apagan donde no importa)
+  AUDIO_ESPERA_MS: 120_000, // cuanto se espera a que se prepare el audio de quien ya fue llamado
   CALLED_DESCONEXION_MS: 30_000, // llamado y sin celu: gracia antes de saltearlo
   EN_FILA_DESCONEXION_MS: 10 * 60_000, // en fila y sin celu (bloqueo de pantalla, etc.)
   PUBLICO_RETENCION_MS: 30 * 60_000, // publico desconectado: se limpia de memoria
@@ -95,6 +102,8 @@ export function crearEscenario({
     ultimaPersonaVista: 0,
     ultimoTickCamara: 0,
   };
+  const audioServidor = new Map(); // cancionId -> { estado, motivo }: el server tiene el archivo y lo valido
+  const audioPantalla = new Map(); // cancionId -> { estado, motivo }: la pantalla lo cargo y se puede reproducir
   let sucio = false;
   const marcar = () => { sucio = true; };
   const emitirSiCambio = () => {
@@ -361,35 +370,97 @@ export function crearEscenario({
       return { ok: false, error: 'Todavía no es tu turno' };
     }
     if (!p.cancionId) return { ok: false, error: 'Elegí una canción primero' };
-    if (!puedeListoCelu(ahora())) {
-      return { ok: false, error: 'Confirmá tu canción con la mano en la pantalla' };
+    // "Listo" es del celu, pero el audio manda: nunca se arranca con audio roto o a medio preparar
+    const a = audioDe(p.cancionId);
+    if (a.estado === 'preparando') return { ok: false, error: 'El audio todavía se está preparando', audio: a };
+    if (a.estado === 'bloqueado') return { ok: false, error: 'La pantalla necesita activar el sonido', audio: a };
+    if (a.estado === 'error') return { ok: false, error: `No se pudo preparar el audio: ${a.motivo || 'fuente no reproducible'}`, audio: a };
+    p.ultimaActividad = ahora();
+    empezarCountdown(p);
+    emitirSiCambio();
+    return { ok: true };
+  }
+
+  // --------------------------------------------------------------- audio
+  // Estado del audio de una cancion, mirado desde donde importa: se escucha o no.
+  //   preparando  se esta bajando / validando / cargando en la pantalla
+  //   bloqueado   todo cargado pero el navegador de la pantalla no tiene sonido habilitado
+  //   lista       existe + cargo + decodifica + el sonido esta habilitado
+  //   error       no se pudo (con motivo)
+  function audioDe(id) {
+    if (!id) return { estado: 'sin_cancion' };
+    if (!C.AUDIO_REQUERIDO) return { estado: 'lista' };
+    const srv = audioServidor.get(id);
+    if (!srv || srv.estado === 'preparando') return { estado: 'preparando', etapa: 'servidor' };
+    if (srv.estado === 'error') return { estado: 'error', motivo: srv.motivo || 'No se pudo conseguir el audio' };
+    const pan = audioPantalla.get(id);
+    if (pan?.estado === 'error') return { estado: 'error', motivo: pan.motivo || 'La pantalla no pudo cargar el audio' };
+    if (!pantalla.conectada || !pan || pan.estado !== 'lista') return { estado: 'preparando', etapa: 'pantalla' };
+    if (!pantalla.audio) return { estado: 'bloqueado', motivo: 'La pantalla necesita activar el sonido' };
+    return { estado: 'lista' };
+  }
+
+  // Lo que ve cada persona: quien todavia esta lejos en la fila no necesita que la
+  // pantalla ya lo tenga cargado (solo se precarga al que sigue): con el archivo
+  // validado en el server ya figura lista.
+  function audioDeParticipante(p) {
+    const a = audioDe(p.cancionId);
+    const cerca = actual?.token === p.token || fila[0] === p.token;
+    if (!cerca && a.estado !== 'error' && a.estado !== 'sin_cancion' && audioServidor.get(p.cancionId)?.estado === 'lista') {
+      return { estado: 'lista', verificadaEnPantalla: false };
     }
-    p.ultimaActividad = ahora();
-    empezarCountdown(p);
+    return a;
+  }
+
+  // el server termino de conseguir/validar el archivo (o fallo)
+  function audioServidorEstado(id, estado, motivo) {
+    if (!id || !['preparando', 'lista', 'error'].includes(estado)) return { ok: false };
+    audioServidor.set(id, { estado, motivo: motivo ? String(motivo).slice(0, 160) : null });
+    marcar();
     emitirSiCambio();
     return { ok: true };
   }
 
-  // La cancion se elige y se confirma CON LA MANO en la pantalla (subir/bajar y
-  // pellizcar). El celu solo la deja preparada de antemano, y sirve de respaldo
-  // si no hay camara (o si pasan unos segundos y la mano no responde): el
-  // escenario nunca depende de un unico canal.
-  function puedeListoCelu(t) {
-    if (!actual || etapa !== ETAPAS.CALLING) return false;
-    return !camaraSana(t) || t >= actual.llamadoDesde + C.LISTO_CELU_DESPUES_MS;
-  }
-
-  function pantallaConfirmar({ cancionId } = {}) {
-    if (etapa !== ETAPAS.CALLING || !actual) return { ok: false, error: 'No hay nadie para confirmar' };
-    const p = participantes.get(actual.token);
-    if (!p) return { ok: false, error: 'Sesión no encontrada' };
-    if (!porId(cancionId)) return { ok: false, error: 'Esa canción no existe' };
-    p.cancionId = cancionId;
-    p.modo = modoEfectivo(p);
-    p.ultimaActividad = ahora();
-    empezarCountdown(p);
+  // la pantalla (el navegador que suena) reporta que paso con el audio de esa cancion
+  function pantallaAudio({ cancionId, estado, motivo } = {}) {
+    if (!cancionId || !['preparando', 'lista', 'error'].includes(estado)) return { ok: false };
+    audioPantalla.set(String(cancionId).slice(0, 80), { estado, motivo: motivo ? String(motivo).slice(0, 160) : null });
+    if (audioPantalla.size > 24) audioPantalla.delete(audioPantalla.keys().next().value);
+    marcar();
     emitirSiCambio();
     return { ok: true };
+  }
+
+  // la pantalla no pudo reproducir (play() rechazado, error del <audio>): nunca seguimos "cantando" en silencio
+  function pantallaAudioFallo({ motivo } = {}) {
+    if (!actual || (etapa !== ETAPAS.COUNTDOWN && etapa !== ETAPAS.PLAYING)) return { ok: false };
+    const m = String(motivo || 'el audio no se pudo reproducir').slice(0, 160);
+    audioPantalla.set(actual.cancionId, { estado: 'error', motivo: m });
+    log(`[escenario] fallo de audio en plena performance: ${m}`);
+    finalizar({ interrumpida: true, motivo: `Falló el audio (${m})` });
+    emitirSiCambio();
+    return { ok: true };
+  }
+
+  // ids de las canciones que alguien esta esperando o cantando (el cache no las borra)
+  function cancionesEnUso() {
+    const ids = new Set();
+    for (const p of participantes.values()) {
+      if (p.cancionId && (p.estado === ESTADOS_P.QUEUED || p.estado === ESTADOS_P.CALLED || p.estado === ESTADOS_P.SINGING)) ids.add(p.cancionId);
+    }
+    if (actual?.cancionId) ids.add(actual.cancionId);
+    return ids;
+  }
+
+  // el audio de esa cancion se volvio a pedir (reintento): se descarta lo que se sabia
+  function audioReintentar(token) {
+    const p = participantes.get(token);
+    if (!p?.cancionId) return { ok: false, error: 'Elegí una canción primero' };
+    audioServidor.delete(p.cancionId);
+    audioPantalla.delete(p.cancionId);
+    marcar();
+    emitirSiCambio();
+    return { ok: true, cancionId: p.cancionId };
   }
 
   function empezarCountdown(p) {
@@ -753,6 +824,8 @@ export function crearEscenario({
         id: p?.id,
         nombre: p?.nombre || 'Alguien',
         cancion: p?.cancionId ? { titulo: porId(p.cancionId)?.titulo, artista: porId(p.cancionId)?.artista } : null,
+        cancionId: p?.cancionId || null,
+        audio: p ? audioDeParticipante(p) : null,
         modo: p?.modo || 'solo',
         conectado: p ? p.conectado : false,
         etaSeg: etas[i],
@@ -773,6 +846,7 @@ export function crearEscenario({
       id: p?.id || null,
       nombre: p?.nombre || 'Alguien',
       cancion: cancionPublica(actual.cancionId),
+      audio: audioDe(actual.cancionId),
       modo: actual.modo,
       copiloto: (p?.copiloto && participantes.get(p.copiloto)?.nombre) || null,
       fase: etapa === ETAPAS.CALLING ? 'eligiendo' : null,
@@ -796,7 +870,7 @@ export function crearEscenario({
       serverNow: t,
       etapa,
       actual: actualPublico(),
-      siguiente: lista[0] ? { id: lista[0].id, nombre: lista[0].nombre, cancion: lista[0].cancion } : null,
+      siguiente: lista[0] ? { id: lista[0].id, nombre: lista[0].nombre, cancion: lista[0].cancion, cancionId: lista[0].cancionId, audio: lista[0].audio } : null,
       filaTotal: lista.length,
       fila: lista,
       reacciones: actual ? { ...actual.reacciones } : reaccionesVacias(),
@@ -825,11 +899,12 @@ export function crearEscenario({
       etaSeg: etas ? etas[idx] : null,
       esSiguiente: idx === 0,
       cancionId: p.cancionId,
+      cancion: cancionPublica(p.cancionId),
       modo: p.modo,
       codigoCopiloto: enJuego ? p.codigoCopiloto : null,
       copiloto: p.copiloto ? { nombre: participantes.get(p.copiloto)?.nombre || 'Copiloto' } : null,
       copilotoDe: singer ? { nombre: singer.nombre, estado: singer.estado } : null,
-      listoCeluDesde: p.estado === ESTADOS_P.CALLED && actual?.token === token && etapa === ETAPAS.CALLING ? actual.llamadoDesde + C.LISTO_CELU_DESPUES_MS : null,
+      audio: audioDeParticipante(p),
       mensaje: p.mensaje,
       resultado: p.estado === ESTADOS_P.DONE ? p.ultimoResultado : null,
       videoToken: p.estado === ESTADOS_P.DONE ? p.ultimoVideoToken : null,
@@ -886,7 +961,18 @@ export function crearEscenario({
           etapa = ETAPAS.STANDBY;
           avanzar();
         } else if (t >= actual.llamadoHasta) {
-          cancelarLlamado(p, 'Se acabó el tiempo: perdiste tu turno');
+          // si lo unico que falta es que se termine de preparar el audio, no se pierde el
+          // turno por eso (hasta AUDIO_ESPERA_MS); si el audio esta roto, se libera
+          const a = audioDe(actual.cancionId);
+          const esperable = a.estado === 'preparando' || a.estado === 'bloqueado';
+          if (esperable && t < actual.llamadoDesde + C.AUDIO_ESPERA_MS) {
+            actual.llamadoHasta = t + 5_000;
+            marcar();
+          } else {
+            cancelarLlamado(p, a.estado === 'lista' || a.estado === 'sin_cancion'
+              ? 'Se acabó el tiempo: perdiste tu turno'
+              : 'No se pudo preparar el audio de tu canción: probá con otra');
+          }
         }
         break;
       }
@@ -953,7 +1039,11 @@ export function crearEscenario({
     pantallaRetoResponder,
     pantallaRetoFin,
     responderReto,
-    pantallaConfirmar,
+    audioServidorEstado,
+    pantallaAudio,
+    pantallaAudioFallo,
+    audioReintentar,
+    cancionesEnUso,
     pantallaFin,
     reinicioSeguro,
     // lectura
