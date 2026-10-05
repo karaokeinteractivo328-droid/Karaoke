@@ -11,8 +11,11 @@ const URL =
     ? `http://${location.hostname}:3000`
     : location.origin);
 
-export function conectar(rol, extra = {}) {
-  return io(URL, { query: { rol, ...extra }, transports: ['websocket', 'polling'] });
+// `auth` puede ser un objeto o una funcion (cb) => cb({...}): se evalua en CADA
+// (re)conexion, asi el celu siempre se presenta con su token, su nombre y lo que
+// quedo haciendo, incluso despues de un reinicio del server.
+export function conectar(rol, extra = {}, auth) {
+  return io(URL, { query: { rol, ...extra }, auth, transports: ['websocket', 'polling'] });
 }
 
 export const SOCKET_URL = URL;

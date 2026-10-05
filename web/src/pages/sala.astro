@@ -107,7 +107,13 @@ import Base from '../layouts/Base.astro';
         <div class="barra"><span id="cantaProgreso"></span></div>
         <p class="contadores" id="cantaReacc"></p>
       </div>
-      <div class="tarjeta teleprompter">
+      <div class="tarjeta destacada retoBox" data-reto hidden>
+        <p class="kicker">🫥 completá la palabra</p>
+        <p class="chico retoDime">Elegí la palabra que falta en la letra</p>
+        <div class="retoOpc"></div>
+      </div>
+      <p class="retoRes" data-reto-res hidden></p>
+      <div class="tarjeta teleprompter" data-teleprompter>
         <p class="letraActual" id="cantaLetra">…</p>
         <p class="letraSig" id="cantaLetraSig"></p>
       </div>
@@ -125,9 +131,9 @@ import Base from '../layouts/Base.astro';
         <p class="contadores" id="resReacc"></p>
       </div>
       <div class="tarjeta">
-        <p class="kicker">tu video</p>
-        <p class="chico" id="resVideoEstado">Se está preparando (puede tardar un minuto).</p>
-        <a id="resVideo" class="boton" href="#" target="_blank" rel="noopener" hidden>⬇ Ver / descargar mi video</a>
+        <p class="kicker" id="resVideoTitulo">🎥 Procesando tu video…</p>
+        <p class="chico" id="resVideoEstado">Puede tardar un minuto. Te avisamos acá apenas esté listo.</p>
+        <a id="resVideo" class="boton" href="#" target="_blank" rel="noopener" hidden>▶ Ver / descargar</a>
       </div>
       <button id="btnDeNuevo" class="boton">🎤 Cantar de nuevo</button>
       <button id="btnSeguirMirando" class="link">Seguir mirando</button>
@@ -140,7 +146,13 @@ import Base from '../layouts/Base.astro';
         <p class="grandeTxt" id="copiDe"></p>
         <p class="chico" id="copiEstado"></p>
       </div>
-      <div class="tarjeta teleprompter">
+      <div class="tarjeta destacada retoBox" data-reto hidden>
+        <p class="kicker">🫥 completá la palabra</p>
+        <p class="chico retoDime">Elegí la palabra que falta en la letra</p>
+        <div class="retoOpc"></div>
+      </div>
+      <p class="retoRes" data-reto-res hidden></p>
+      <div class="tarjeta teleprompter" data-teleprompter>
         <p class="letraActual" id="copiLetra">Esperando que arranque la canción…</p>
         <p class="letraSig" id="copiLetraSig"></p>
       </div>
@@ -221,6 +233,16 @@ import Base from '../layouts/Base.astro';
     .contadores { font-family: var(--fat); font-size: 1.3rem; letter-spacing: 0.05em; }
     .teleprompter { text-align: center; }
     .letraActual { font-family: var(--fat); text-transform: uppercase; font-size: 1.6rem; line-height: 1.15; }
+    .retoBox { background: #fff6e0; }
+    .retoOpc { display: grid; gap: 0.6rem; }
+    .retoOpc :global(button) { font-family: var(--fat); font-size: 1.5rem; text-transform: uppercase; padding: 1rem; border: 3px solid var(--tinta); border-radius: 1rem; background: #fff; cursor: pointer; box-shadow: 3px 3px 0 var(--tinta); }
+    .retoOpc :global(button:active) { transform: translateY(2px); }
+    .retoOpc :global(button:disabled) { opacity: 0.55; }
+    .retoOpc :global(button.elegida) { background: var(--tinta); color: #fff; opacity: 1; }
+    .retoRes { font-family: var(--fat); text-transform: uppercase; font-size: 1.15rem; padding: 0.7rem 1rem; border-radius: 1rem; border: 3px solid var(--tinta); background: #fff; }
+    .retoRes[hidden], .retoBox[hidden] { display: none; }
+    .retoRes.ok { background: #1f9d55; color: #fff; }
+    .retoRes.fallo { background: #b3261e; color: #fff; }
     .letraSig { font-family: var(--body); font-weight: 600; opacity: 0.55; font-size: 1rem; }
     #aviso { position: fixed; top: 0; left: 0; right: 0; z-index: 10; background: var(--tinta); color: #fff; font-family: var(--body); font-weight: 700; padding: 0.8rem 1rem; text-align: center; }
     #aviso[hidden], #sinConexion[hidden] { display: none; }

@@ -16,7 +16,13 @@ export function crearGrabacion() {
   }
 
   function iniciar(videoStream, audioStream) {
-    if (rec || !window.MediaRecorder) return;
+    if (!window.MediaRecorder) return;
+    // una grabacion anterior que quedo colgada no puede bloquear la siguiente
+    if (rec && rec.state === 'inactive') rec = null;
+    if (rec) {
+      try { rec.stop(); } catch {}
+      rec = null;
+    }
     const vt = videoStream?.getVideoTracks?.()[0];
     if (!vt) return;
     const at = audioStream?.getAudioTracks?.() || [];
@@ -26,7 +32,7 @@ export function crearGrabacion() {
     blob = null;
     try {
       const mimeType = mimeSoportado();
-      rec = new MediaRecorder(grab, mimeType ? { mimeType, videoBitsPerSecond: 4_000_000 } : undefined);
+      rec = new MediaRecorder(grab, mimeType ? { mimeType, videoBitsPerSecond: 2_500_000 } : undefined);
     } catch (err) {
       console.warn('[grabacion] MediaRecorder:', err.message);
       return;
@@ -40,13 +46,20 @@ export function crearGrabacion() {
       // sin grabacion en curso no hay nada que entregar (y jamas devolvemos el
       // blob de la performance anterior para subirlo con el token de otra)
       if (!rec || rec.state === 'inactive') return resolve(null);
-      rec.onstop = () => {
-        blob = new Blob(chunks, { type: chunks[0]?.type || 'video/webm' });
+      let listo = false;
+      const entregar = () => {
+        if (listo) return;
+        listo = true;
+        clearTimeout(seguridad);
+        const b = chunks.length ? new Blob(chunks, { type: chunks[0]?.type || 'video/webm' }) : null;
         rec = null;
-        resolve(blob);
-        blob = null;
+        chunks = [];
+        resolve(b);
       };
-      try { rec.stop(); } catch { rec = null; resolve(null); }
+      // si el navegador nunca dispara 'stop' no nos quedamos esperando para siempre
+      const seguridad = setTimeout(entregar, 5000);
+      rec.onstop = entregar;
+      try { rec.stop(); } catch { entregar(); }
     });
   }
 

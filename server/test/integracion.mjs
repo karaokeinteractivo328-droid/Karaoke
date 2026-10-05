@@ -132,11 +132,11 @@ try {
   sinSesion.disconnect();
 
   console.log('\n== Fin de canción -> RESULT -> siguiente automático');
-  pantalla.emit('pantalla:retos', { puntos: 12 });
+  pantalla.emit('pantalla:retoCumplido', { id: 'int1', tipo: 'una', puntos: 10 });
   pantalla.emit('pantalla:fin', { progreso: 1 });
   await hasta(() => pantalla.estado?.etapa === 'RESULT', 2000, 'RESULT');
   const res = pantalla.estado.actual.resultado;
-  ok(res && res.total > 0 && res.desglose.retos === 12, `resultado con desglose (${res?.total} pts: ${JSON.stringify(res?.desglose)})`);
+  ok(res && res.total > 0 && res.desglose.retos === 10, `resultado con desglose (${res?.total} pts: ${JSON.stringify(res?.desglose)})`);
   ok(res.reacciones.corazon >= 3, 'las reacciones suman al resultado');
   ok(pantalla.estado.siguiente?.nombre === orden[0], 'durante el resultado ya se sabe quién sigue');
   ok(iara.yo?.estado === 'DONE' && !!iara.yo?.videoToken, 'Iara ve su resultado y tiene su link de video privado');

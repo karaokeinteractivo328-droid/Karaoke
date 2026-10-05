@@ -36,3 +36,23 @@ export function indiceActual(letras, t) {
   }
   return res;
 }
+
+// Tiempo en que empieza cada palabra de una linea. La letra del .lrc solo trae
+// el comienzo de LINEA: se reparte por largo de palabra, pero la parte "cantada"
+// no puede ser mas larga que lo que dura de verdad una linea (si despues hay un
+// instrumental largo, las ultimas palabras no deben quedarse estiradas hasta
+// la linea siguiente).
+export function tiemposPalabras(texto, inicio, siguienteInicio) {
+  const palabras = String(texto).split(/\s+/).filter(Boolean);
+  if (!palabras.length) return [];
+  const pesos = palabras.map((w) => Math.max(2, w.length));
+  const total = pesos.reduce((a, b) => a + b, 0);
+  const hueco = Number.isFinite(siguienteInicio) ? Math.max(0.6, siguienteInicio - inicio) : 4;
+  const cantada = Math.min(hueco, total * 0.11 + 0.4); // ~9 letras por segundo cantando
+  let acc = 0;
+  return palabras.map((palabra, i) => {
+    const t0 = inicio + (acc / total) * cantada;
+    acc += pesos[i];
+    return { palabra, t0 };
+  });
+}

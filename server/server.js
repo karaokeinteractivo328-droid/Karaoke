@@ -105,6 +105,7 @@ const escenario = crearEscenario({
   log: (m) => console.log(m),
   onCambio: emitirTodo,
   onRonda: ({ videoToken }) => videoTokens.set(videoToken, Date.now()),
+  onRetoResultado: (r) => io.emit('reto:resultado', r),
   onResultado: ({ rondaId, nombre, cancion, resultado }) => {
     guardarPuntaje({
       sesionId: rondaId,
@@ -148,6 +149,8 @@ const GRAB = join(__dirname, 'grabaciones');
 await mkdir(GRAB, { recursive: true });
 const idOk = (s) => /^[A-Za-z0-9]{4,40}$/.test(s || '');
 const enProceso = new Set();
+const videoErrores = new Map(); // token -> motivo (conversion o subida fallida)
+const ESPERA_SUBIDA_MS = 4 * 60 * 1000; // si la pantalla no sube nada en este tiempo, se da por perdido
 const RETENCION_VIDEO_MS = 6 * 60 * 60 * 1000; // el video se borra a las 6 h
 
 // Si el server se reinicia (o se cuelga) a mitad de una conversion, puede
@@ -161,7 +164,7 @@ for (const f of await readdir(GRAB).catch(() => [])) {
 // fisica que corre horas no puede llenarse de grabaciones).
 setInterval(async () => {
   const limite = Date.now() - RETENCION_VIDEO_MS;
-  for (const [t, creado] of videoTokens) if (creado < limite) videoTokens.delete(t);
+  for (const [t, creado] of videoTokens) if (creado < limite) { videoTokens.delete(t); videoErrores.delete(t); }
   for (const f of await readdir(GRAB).catch(() => [])) {
     try {
       const st = await stat(join(GRAB, f));
@@ -199,6 +202,7 @@ function aMp4(sesion) {
     async (err, _stdout, stderr) => {
       enProceso.delete(sesion);
       if (err) {
+        videoErrores.set(sesion, 'conversion');
         console.warn(`[video] ffmpeg fallo (${sesion}):`, err.message.split('\n')[0]);
         console.warn((stderr || '').split('\n').slice(-15).join('\n'));
         await rm(tmp, { force: true }).catch(() => {});
@@ -210,6 +214,7 @@ function aMp4(sesion) {
         if (st.size < 10_000) throw new Error(`mp4 sospechosamente chico (${st.size}B)`);
         await validarMp4(tmp);
       } catch (e) {
+        videoErrores.set(sesion, 'conversion');
         console.warn(`[video] mp4 invalido para ${sesion}:`, e.message);
         await rm(tmp, { force: true }).catch(() => {});
         return;
@@ -254,6 +259,32 @@ app.post(
   }
 );
 
+// Estado del video de UNA performance (cada una tiene su propio token):
+//   desconocido  el token no existe (o ya se borro)
+//   esperando    la performance existe pero la pantalla todavia no subio el video
+//   procesando   llego el archivo y se esta convirtiendo a mp4
+//   listo        el mp4 se puede ver / descargar
+//   error        la subida o la conversion fallaron (si hay webm, igual se puede ver)
+function estadoVideo(token) {
+  const mp4 = existsSync(join(GRAB, `${token}.mp4`));
+  const webm = existsSync(join(GRAB, `${token}.webm`));
+  if (mp4) return { estado: 'listo', mp4: true, webm: false };
+  if (enProceso.has(token)) return { estado: 'procesando', mp4: false, webm };
+  if (videoErrores.has(token)) return { estado: 'error', mp4: false, webm, motivo: videoErrores.get(token) };
+  if (webm) return { estado: 'procesando', mp4: false, webm };
+  const creado = videoTokens.get(token);
+  if (creado == null) return { estado: 'desconocido', mp4: false, webm: false };
+  if (Date.now() - creado > ESPERA_SUBIDA_MS) return { estado: 'error', mp4: false, webm: false, motivo: 'subida' };
+  return { estado: 'esperando', mp4: false, webm: false };
+}
+
+app.get('/api/video/:token/estado', (req, res) => {
+  const t = req.params.token;
+  if (!idOk(t)) return res.status(404).json({ estado: 'desconocido' });
+  const e = estadoVideo(t);
+  res.json({ estado: e.estado, url: e.estado === 'listo' ? `/video/${t}` : null, motivo: e.motivo || null });
+});
+
 // `/video/<token>.mp4` / `.webm` = archivo ; `/video/<token>` = pagina.
 app.get('/video/:archivo', (req, res) => {
   const a = req.params.archivo;
@@ -266,28 +297,36 @@ app.get('/video/:archivo', (req, res) => {
     }
   }
   if (!idOk(a)) return res.sendStatus(404);
-  const listo = existsSync(join(GRAB, `${a}.mp4`));
-  const hayWebm = existsSync(join(GRAB, `${a}.webm`));
-  const conocido = listo || hayWebm || enProceso.has(a) || videoTokens.has(a);
-  const subiendo = !listo && !hayWebm && !enProceso.has(a);
+  const e = estadoVideo(a);
   const pagina = (cuerpo) => `<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Tu video · Karaoke</title>
 <style>body{margin:0;background:#0a0716;color:#f2eee5;font-family:system-ui,sans-serif;text-align:center;padding:24px}
 h1{font-weight:800}video{width:100%;max-width:520px;border-radius:14px;background:#000}
 a.btn{display:inline-block;margin-top:16px;background:#ec2f80;color:#fff;font-weight:700;text-decoration:none;padding:14px 22px;border-radius:999px}
-p{opacity:.75}</style></head><body>${cuerpo}</body></html>`;
-  if (!conocido) {
+p{opacity:.75}.spin{font-size:2rem;animation:g 1.2s linear infinite;display:inline-block}@keyframes g{to{transform:rotate(360deg)}}</style></head><body>${cuerpo}</body></html>`;
+  const recarga = (ms) => `<script>setTimeout(()=>location.reload(),${ms})</script>`;
+  if (e.estado === 'desconocido') {
     return res.status(404).type('html').send(pagina('<h1>Este video ya no está</h1><p>Los videos se borran a las 6 horas, o el link no es correcto.</p>'));
   }
-  res.type('html').send(
-    pagina(`<h1>¡Sos una estrella! ⭐</h1>
-${listo
-  ? `<video src="/video/${a}.mp4" controls playsinline></video><br>
-     <a class="btn" href="/video/${a}.mp4" download="karaoke-${a}.mp4">↓ Descargar (mp4)</a>`
-  : subiendo
-    ? `<p>Todavía no llegó tu video. Recargá en unos segundos.</p><script>setTimeout(()=>location.reload(),4000)</script>`
-    : `<p>Procesando tu video… puede tardar unos minutos, no cierres esta página.</p><script>setTimeout(()=>location.reload(),6000)</script>`}`)
-  );
+  if (e.estado === 'listo') {
+    return res.type('html').send(pagina(`<h1>🎥 Tu video está listo</h1>
+<video src="/video/${a}.mp4" controls playsinline></video><br>
+<a class="btn" href="/video/${a}.mp4" download="karaoke-${a}.mp4">↓ Descargar (mp4)</a>`));
+  }
+  if (e.estado === 'error' && e.webm) {
+    // la conversion fallo pero el archivo original sirve: se ofrece tal cual
+    return res.type('html').send(pagina(`<h1>🎥 Tu video</h1>
+<video src="/video/${a}.webm" controls playsinline></video><br>
+<a class="btn" href="/video/${a}.webm" download="karaoke-${a}.webm">↓ Descargar</a>
+<p>No pudimos pasarlo a mp4, pero se ve igual (formato webm).</p>`));
+  }
+  if (e.estado === 'error') {
+    return res.type('html').send(pagina('<h1>No pudimos generar tu video</h1><p>La pantalla no llegó a enviarlo. Probá cantar de nuevo, ¡y gracias por participar!</p>'));
+  }
+  if (e.estado === 'procesando') {
+    return res.type('html').send(pagina(`<h1><span class="spin">⏳</span> Procesando tu video…</h1><p>Puede tardar un minuto. Esta página se actualiza sola.</p>${recarga(5000)}`));
+  }
+  res.type('html').send(pagina(`<h1><span class="spin">⏳</span> Preparando tu video…</h1><p>La pantalla lo está enviando. Esta página se actualiza sola.</p>${recarga(4000)}`));
 });
 
 // QR de descarga del video de una performance (link privado con su token).
@@ -346,17 +385,23 @@ io.on('connection', (socket) => {
   socket.emit('estado', socket.id === pantallaPrimaria ? { ...escenario.snapshot(), privado: escenario.privadoPantalla() } : escenario.snapshot());
 
   // --- celus: identidad por token -----------------------------------
-  socket.on('hola', (datos = {}, cb) => {
+  // La identidad viaja en el handshake (`auth`): la conexion NACE registrada, asi
+  // un intent que llegue primero (celu que reconecta tras un reinicio y toca
+  // "Quiero cantar" enseguida) ya encuentra la sesion. `hola` sigue existiendo
+  // y es idempotente (actualiza el nombre y confirma).
+  const registrar = (datos = {}) => {
     const r = escenario.hola(datos);
-    if (!r.ok) return cb?.(r);
+    if (!r.ok) return r;
     const token = datos.token;
     tokenPorSocket.set(socket.id, token);
     if (!socketsPorToken.has(token)) socketsPorToken.set(token, new Set());
     socketsPorToken.get(token).add(socket.id);
     socket.emit('yo', escenario.yo(token));
     if (ultimaLetra) socket.emit('letra', ultimaLetra);
-    cb?.({ ok: true, yo: escenario.yo(token) });
-  });
+    return { ok: true, yo: escenario.yo(token) };
+  };
+  if (rol !== 'pantalla' && socket.handshake.auth?.token) registrar(socket.handshake.auth);
+  socket.on('hola', (datos = {}, cb) => cb?.(registrar(datos)));
 
   // todo intent de celu pasa por aca: sin token no hay nada que hacer
   // (y un tope por socket: un celu roto o malicioso no puede inundar al server)
@@ -376,6 +421,7 @@ io.on('connection', (socket) => {
   socket.on('cancion:elegir', ({ cancionId, modo } = {}, cb) => intent(cb, (t) => escenario.elegirCancion(t, cancionId, modo)));
   socket.on('turno:listo', (_d, cb) => intent(cb, (t) => escenario.listo(t)));
   socket.on('cantante:terminar', (_d, cb) => intent(cb, (t) => escenario.terminar(t)));
+  socket.on('reto:responder', (d = {}, cb) => intent(cb, (t) => escenario.responderReto(t, d)));
   socket.on('copiloto:unirse', ({ codigo } = {}, cb) => intent(cb, (t) => escenario.unirseCopiloto(t, codigo)));
   socket.on('copiloto:salir', (_d, cb) => intent(cb, (t) => escenario.salirCopiloto(t)));
   socket.on('reaccion', ({ tipo } = {}, cb) =>
@@ -392,7 +438,11 @@ io.on('connection', (socket) => {
   };
   socket.on('pantalla:salud', soloPantalla((d = {}) => escenario.pantallaSalud(d)));
   socket.on('pantalla:presencia', soloPantalla(({ hay } = {}) => escenario.pantallaPresencia(!!hay)));
-  socket.on('pantalla:retos', soloPantalla(({ puntos } = {}) => escenario.pantallaRetos(Number(puntos))));
+  socket.on('pantalla:retoCumplido', soloPantalla((d = {}) => escenario.pantallaRetoCumplido(d)));
+  socket.on('pantalla:retoPalabra', soloPantalla((d = {}, cb) => cb?.(escenario.pantallaRetoPalabra(d))));
+  socket.on('pantalla:retoResponder', soloPantalla((d = {}) => escenario.pantallaRetoResponder(d)));
+  socket.on('pantalla:retoFin', soloPantalla((d = {}) => escenario.pantallaRetoFin(d)));
+  socket.on('pantalla:videoError', soloPantalla(({ token } = {}) => { if (idOk(token) && videoTokens.has(token)) videoErrores.set(token, 'subida'); }));
   socket.on('pantalla:fin', soloPantalla(({ progreso } = {}) => escenario.pantallaFin({ progreso: Number(progreso) })));
   // la cancion se confirma con la mano, en el escenario
   socket.on('pantalla:confirmar', soloPantalla(({ cancionId } = {}) => escenario.pantallaConfirmar({ cancionId })));

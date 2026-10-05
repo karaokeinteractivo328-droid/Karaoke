@@ -9,7 +9,8 @@
     "build": "astro build",
     "preview": "astro preview --host",
     "postinstall": "node scripts/preparar-mediapipe.mjs",
-    "prep:mediapipe": "node scripts/preparar-mediapipe.mjs"
+    "prep:mediapipe": "node scripts/preparar-mediapipe.mjs",
+    "test": "node --test test/manos.test.mjs test/retos.test.mjs test/reloj.test.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22",
