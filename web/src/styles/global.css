@@ -813,6 +813,9 @@ body[data-yt="chico"] #ytWrap {
   height: 200px;
   border-radius: 8px;
   box-shadow: none;
+  /* DEMO (proyecto de facultad): menos opacidad para que no distraiga. Bajar opacidad incumple las
+     condiciones del reproductor embebido de YouTube: para un uso publico volver a 1. */
+  opacity: var(--yt-opacidad, 0.3);
 }
 /* sin letra propia no hay nada que dibujar encima del video */
 body[data-yt="grande"] #letra { visibility: hidden; }
