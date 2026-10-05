@@ -426,7 +426,7 @@ io.on('connection', (socket) => {
     cb?.(r);
   };
 
-  socket.on('fila:entrar', ({ nombre } = {}, cb) => intent(cb, (t) => escenario.entrarFila(t, nombre)));
+  socket.on('fila:entrar', ({ nombre, modo } = {}, cb) => intent(cb, (t) => escenario.entrarFila(t, nombre, modo)));
   socket.on('fila:salir', (_d, cb) => intent(cb, (t) => escenario.salirFila(t)));
   socket.on('modo:elegir', ({ modo } = {}, cb) => intent(cb, (t) => escenario.elegirModo(t, modo)));
   socket.on('cancion:elegir', ({ cancionId, modo } = {}, cb) => intent(cb, (t) => escenario.elegirCancion(t, cancionId, modo)));

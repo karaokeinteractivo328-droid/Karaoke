@@ -267,3 +267,15 @@ test('dueto: tras reiniciar el server el modo elegido se conserva', () => {
   m.e.hola({ token: tk(7), nombre: 'Yaz', intencion: { enFila: true, cancionId: 'a', modo: 'duo' } });
   assert.equal(m.e.yo(tk(7)).modo, 'duo');
 });
+
+test('dueto: se puede elegir ANTES de anotarse y llega a la pantalla como dueto', () => {
+  const m = mundo();
+  const a = m.persona(1, 'A');
+  assert.equal(m.e.entrarFila(a, 'A', 'duo').ok, true); // solo/duo viaja con "Quiero cantar"
+  assert.equal(m.e.yo(a).modo, 'duo');
+  assert.equal(m.e.snapshot().actual.modo, 'duo', 'si pasa ya, el escenario lo sabe');
+  m.e.salirFila(a);
+  assert.equal(m.e.entrarFila(a, 'A').ok, true, 'sin elegir nada recuerda la eleccion anterior');
+  assert.equal(m.e.yo(a).modo, 'duo');
+  assert.equal(m.e.entrarFila(a, 'A', 'trio').ok, true, 'un modo invalido se ignora');
+});

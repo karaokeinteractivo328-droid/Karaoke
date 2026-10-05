@@ -31,6 +31,12 @@ import Base from '../layouts/Base.astro';
           <input id="inNombre" type="text" maxlength="24" placeholder="¿Cómo te llamás?" autocomplete="off" />
         </label>
         <p id="errPublico" class="error" hidden></p>
+        <p class="kicker">¿cómo querés cantar?</p>
+        <div class="modo" id="modoPublico">
+          <button data-modo="solo">🎤 Solo</button>
+          <button data-modo="duo">👥 Dúo</button>
+        </div>
+        <p class="chico" id="ayudaModoPublico"></p>
         <button id="btnCantar" class="boton">🎤 Quiero cantar</button>
         <button id="btnCopiloto" class="link">Tengo un código de copiloto</button>
         <div id="boxCopiloto" hidden>

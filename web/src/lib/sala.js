@@ -27,6 +27,7 @@ let totales = { corazon: 0, fuego: 0, aplauso: 0 };
 let letra = { actual: '', siguiente: '' };
 let canciones = [];
 let filtro = '';
+let modoPendiente = null; // solo/duo elegido ANTES de anotarse (o sin que el server lo confirme todavia)
 let resultadoOculto = leer('karaoke:resultadoOculto') || '';
 let vistaPrevia = '';
 let estadoPrevio = '';
@@ -69,6 +70,12 @@ socket.on('yo', (m) => {
   yo = m;
   if (m?.nombre) { nombre = m.nombre; guardar('karaoke:nombre', nombre); }
   recordarIntencion();
+  // eligio solo/dúo antes de anotarse y el server no lo aplicó (version anterior): se pide ahora
+  if (modoPendiente && enFila(m)) {
+    const quiero = modoPendiente;
+    modoPendiente = null;
+    if (m.modo !== quiero) elegirModo(quiero);
+  }
   render();
 });
 socket.on('reaccion', (r) => {
@@ -171,6 +178,7 @@ function render() {
   renderResultado();
   renderCopiloto();
   renderSelectores();
+  pintarModoPublico();
   renderReto();
   pintarContadores();
   pintarLetra();
@@ -476,8 +484,24 @@ function renderSelectores() {
 // aguanta que el server sea de una version anterior: Vercel y Render no se
 // actualizan a la vez, y un server viejo no conoce `modo:elegir` (antes el boton
 // quedaba mudo).
+const enFila = (m) => !!m && (m.estado === 'QUEUED' || m.estado === 'CALLED');
+const modoMostrado = () => modoPendiente ?? yo?.modo ?? 'solo';
+
+function pintarModoPublico() {
+  const m = modoMostrado();
+  for (const b of document.querySelectorAll('#modoPublico button')) b.classList.toggle('on', b.dataset.modo === m);
+  $('ayudaModoPublico').textContent = m === 'duo'
+    ? 'A dúo: vos cantás la VOZ 1 y tu compañero/a la VOZ 2 (entra con tu código).'
+    : 'Solo: cantás vos toda la canción.';
+}
+
 function elegirModo(modo) {
-  if (!yo || (yo.estado !== 'QUEUED' && yo.estado !== 'CALLED')) return;
+  if (!enFila(yo)) {
+    // todavia no esta en la fila: se recuerda y viaja con "Quiero cantar"
+    modoPendiente = modo;
+    pintarModoPublico();
+    return;
+  }
   yo = { ...yo, modo };
   firmaSelector = '';
   renderSelectores();
@@ -542,7 +566,9 @@ $('btnCantar').addEventListener('click', () => {
   }
   nombre = n;
   guardar('karaoke:nombre', nombre);
-  enviar('fila:entrar', { nombre: n }, (r) => { err.textContent = r.error; err.hidden = false; });
+  const m = modoMostrado();
+  modoPendiente = m; // si el server es de una version anterior, se reconcilia al llegar `yo`
+  enviar('fila:entrar', { nombre: n, modo: m }, (r) => { err.textContent = r.error; err.hidden = false; });
 });
 
 $('btnCopiloto').addEventListener('click', () => {
@@ -564,7 +590,7 @@ $('btnTerminar').addEventListener('click', () => {
 $('btnDeNuevo').addEventListener('click', () => {
   ocultarResultado();
   const n = $('inNombre').value.trim() || nombre;
-  if (n) enviar('fila:entrar', { nombre: n });
+  if (n) { const m = modoMostrado(); modoPendiente = m; enviar('fila:entrar', { nombre: n, modo: m }); }
 });
 $('btnSeguirMirando').addEventListener('click', ocultarResultado);
 

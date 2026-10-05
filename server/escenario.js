@@ -225,9 +225,14 @@ export function crearEscenario({
     return { ok: true };
   }
 
-  function entrarFila(token, nombre) {
+  function entrarFila(token, nombre, modo) {
     const p = participantes.get(token);
     if (!p) return { ok: false, error: 'Sesión no encontrada, recargá la página' };
+    // la persona puede elegir solo / dúo ANTES de anotarse
+    if (modo === 'solo' || modo === 'duo') {
+      p.modoManual = modo;
+      p.modo = modoEfectivo(p);
+    }
     const n = limpiarNombre(nombre);
     if (n) p.nombre = n;
     if (!p.nombre) return { ok: false, error: 'Escribí tu nombre' };
