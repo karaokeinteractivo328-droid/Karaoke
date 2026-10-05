@@ -472,6 +472,26 @@ function renderSelectores() {
   }
 }
 
+// Solo / Dúo. Responde al instante (se marca el boton sin esperar al server) y
+// aguanta que el server sea de una version anterior: Vercel y Render no se
+// actualizan a la vez, y un server viejo no conoce `modo:elegir` (antes el boton
+// quedaba mudo).
+function elegirModo(modo) {
+  if (!yo || (yo.estado !== 'QUEUED' && yo.estado !== 'CALLED')) return;
+  yo = { ...yo, modo };
+  firmaSelector = '';
+  renderSelectores();
+  socket.timeout(2500).emit('modo:elegir', { modo }, (err, r) => {
+    if (!err) {
+      if (r && r.ok === false) mostrarAviso(r.error || 'No se pudo cambiar el modo', 5000);
+      return;
+    }
+    // sin respuesta: server anterior. Por la via vieja el modo viaja con la cancion.
+    if (yo?.cancionId) enviar('cancion:elegir', { cancionId: yo.cancionId, modo });
+    else mostrarAviso('El servidor se está actualizando: elegí tu canción y probá el modo de nuevo en un minuto.', 7000);
+  });
+}
+
 document.addEventListener('click', (e) => {
   const li = e.target.closest?.('.canciones li');
   if (li) {
@@ -481,7 +501,7 @@ document.addEventListener('click', (e) => {
   }
   const mb = e.target.closest?.('.modo button');
   if (mb) {
-    enviar('modo:elegir', { modo: mb.dataset.modo });
+    elegirModo(mb.dataset.modo);
   }
 });
 
