@@ -192,7 +192,8 @@ async function pedirMedios() {
   const gum = (c) => navigator.mediaDevices.getUserMedia(c);
   const v = { width: 1280, height: 720 };
   try {
-    return await gum({ video: v, audio: true });
+    // eco/ruido/ganancia automaticos: la voz sale pareja y la musica que sale por los parlantes se resta
+    return await gum({ video: v, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   } catch (e) {
     // si falla uno de los dos, seguimos con el que si tengamos
     try { return await gum({ video: v }); } catch {}
@@ -1029,27 +1030,46 @@ async function mostrarResultado(s) {
       .catch(() => {});
   }
 
-  // cerrar la grabacion y subirla: el server la pasa a .mp4 con ffmpeg
+  // La performance SIEMPRE se graba. Al terminar se guarda en memoria y recien se sube (y el server
+  // la pasa a .mp4 con ffmpeg) si la persona lo pide desde su celu: ver `video:subir`.
   if (espejo) return;
   const grabando = grabacion.grabando;
   const blob = await grabacion.detener();
   if (!blob || !blob.size || !token) {
-    console.warn(`[video] no hay nada para subir: blob=${blob ? blob.size + 'B' : 'null'} (estaba grabando: ${grabando}) token=${token ? 'si' : 'NO'} diagnostico=${JSON.stringify(grabacion.diagnostico)}`);
+    console.warn(`[video] no hay nada para guardar: blob=${blob ? blob.size + 'B' : 'null'} (estaba grabando: ${grabando}) token=${token ? 'si' : 'NO'} diagnostico=${JSON.stringify(grabacion.diagnostico)}`);
     // el celu no tiene que esperar para siempre un video que no va a llegar
     if (token) socket.emit('pantalla:videoError', { token });
     return;
   }
-  // la subida es lo mas fragil del video (archivo grande, wifi): se reintenta
-  // con espera creciente y, si no hay caso, se le avisa al server para que el
-  // celu de la persona muestre un error claro en vez de esperar para siempre
+  guardarVideo(token, blob);
+  socket.emit('pantalla:videoGrabado', { token });
+}
+
+// Videos grabados esperando que alguien los pida (solo los ultimos: pesan decenas de MB).
+const videosGuardados = new Map(); // token -> { blob, t }
+const MAX_VIDEOS_GUARDADOS = 3;
+function guardarVideo(token, blob) {
+  videosGuardados.set(token, { blob, t: Date.now() });
+  while (videosGuardados.size > MAX_VIDEOS_GUARDADOS) videosGuardados.delete(videosGuardados.keys().next().value);
+}
+
+// la persona pidio su video: la subida es lo mas fragil (archivo grande, wifi): se reintenta
+// con espera creciente y, si no hay caso, se le avisa al server para que el celu muestre un
+// error claro en vez de esperar para siempre
+async function subirVideo(token) {
+  const g = videosGuardados.get(token);
+  if (!g) {
+    socket.emit('pantalla:videoError', { token, motivo: 'vencido' }); // se recargo la pantalla o ya se descarto
+    return;
+  }
   for (let intento = 0; intento < 4; intento++) {
     try {
       const resp = await fetch(`${SOCKET_URL}/api/video/${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'video/webm' },
-        body: blob,
+        body: g.blob,
       });
-      if (resp.ok || resp.status === 409) return;
+      if (resp.ok || resp.status === 409) { videosGuardados.delete(token); return; }
       console.warn(`[video] el server rechazo la subida (${resp.status})`);
       if (resp.status === 403 || resp.status === 413) break; // reintentar no arregla esto
     } catch (e) {
@@ -1059,6 +1079,7 @@ async function mostrarResultado(s) {
   }
   socket.emit('pantalla:videoError', { token });
 }
+socket.on('video:subir', ({ token } = {}) => { if (!espejo && token) subirVideo(String(token)); });
 
 // --- helpers UI ------------------------------------------
 let ultimoCorazon = 0;

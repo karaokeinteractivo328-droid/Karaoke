@@ -225,7 +225,13 @@ await mkdir(GRAB, { recursive: true });
 const idOk = (s) => /^[A-Za-z0-9]{4,40}$/.test(s || '');
 const enProceso = new Set();
 const videoErrores = new Map(); // token -> motivo (conversion o subida fallida)
-const ESPERA_SUBIDA_MS = 4 * 60 * 1000; // si la pantalla no sube nada en este tiempo, se da por perdido
+const ESPERA_SUBIDA_MS = 4 * 60 * 1000; // pedido el video: si la pantalla no lo sube en este tiempo, se da por perdido
+// El video SIEMPRE se graba en la pantalla, pero solo se genera (sube y convierte) si la persona lo pide:
+//   guardando -> disponible (la pantalla lo tiene en memoria) -> solicitado -> procesando -> listo
+const ESPERA_GRABACION_MS = 15 * 60 * 1000; // la cancion + cerrar la grabacion
+const VIDEO_DISPONIBLE_MS = 20 * 60 * 1000; // cuanto aguanta la pantalla el video guardado esperando que lo pidan
+const videoDisponibles = new Map(); // token -> cuando la pantalla aviso que lo tiene guardado
+const videoPedidos = new Map(); // token -> cuando la persona pidio generarlo
 const RETENCION_VIDEO_MS = 6 * 60 * 60 * 1000; // el video se borra a las 6 h
 
 // Si el server se reinicia (o se cuelga) a mitad de una conversion, puede
@@ -239,7 +245,7 @@ for (const f of await readdir(GRAB).catch(() => [])) {
 // fisica que corre horas no puede llenarse de grabaciones).
 setInterval(async () => {
   const limite = Date.now() - RETENCION_VIDEO_MS;
-  for (const [t, creado] of videoTokens) if (creado < limite) { videoTokens.delete(t); videoErrores.delete(t); }
+  for (const [t, creado] of videoTokens) if (creado < limite) { videoTokens.delete(t); videoErrores.delete(t); videoPedidos.delete(t); videoDisponibles.delete(t); }
   for (const f of await readdir(GRAB).catch(() => [])) {
     try {
       const st = await stat(join(GRAB, f));
@@ -352,9 +358,43 @@ function estadoVideo(token) {
   if (webm) return { estado: 'procesando', mp4: false, webm };
   const creado = videoTokens.get(token);
   if (creado == null) return { estado: 'desconocido', mp4: false, webm: false };
-  if (Date.now() - creado > ESPERA_SUBIDA_MS) return { estado: 'error', mp4: false, webm: false, motivo: 'subida' };
-  return { estado: 'esperando', mp4: false, webm: false };
+  const pedido = videoPedidos.get(token);
+  if (pedido) {
+    if (Date.now() - pedido > ESPERA_SUBIDA_MS) return { estado: 'error', mp4: false, webm: false, motivo: 'subida' };
+    return { estado: 'solicitado', mp4: false, webm: false };
+  }
+  const disponible = videoDisponibles.get(token);
+  if (disponible) {
+    if (Date.now() - disponible > VIDEO_DISPONIBLE_MS) return { estado: 'vencido', mp4: false, webm: false };
+    return { estado: 'disponible', mp4: false, webm: false };
+  }
+  if (Date.now() - creado > ESPERA_GRABACION_MS) return { estado: 'error', mp4: false, webm: false, motivo: 'subida' };
+  return { estado: 'guardando', mp4: false, webm: false };
 }
+
+// La persona decide si quiere el video: recien ahi la pantalla lo sube y se convierte a mp4.
+function pedirGeneracion(token) {
+  if (videoPedidos.has(token) && !videoErrores.has(token)) return;
+  videoPedidos.set(token, Date.now());
+  videoErrores.delete(token);
+  if (videoDisponibles.has(token)) avisarPantallaQueSuba(token);
+  // si la pantalla todavia esta cerrando la grabacion, avisa apenas la tenga (pantalla:videoGrabado)
+}
+function avisarPantallaQueSuba(token) {
+  const s = io.sockets.sockets.get(pantallaPrimaria);
+  if (s) s.emit('video:subir', { token });
+  else videoErrores.set(token, 'pantalla');
+}
+
+app.post('/api/video/:token/generar', limitar(10, 10_000), (req, res) => {
+  const token = req.params.token;
+  if (!idOk(token) || !videoTokens.has(token)) return res.status(404).json({ ok: false, error: 'Ese video ya no existe' });
+  const e = estadoVideo(token);
+  if (e.estado === 'listo' || e.estado === 'procesando') return res.json({ ok: true, estado: e.estado });
+  if (e.estado === 'vencido') return res.status(410).json({ ok: false, error: 'La pantalla ya no tiene la grabación guardada' });
+  pedirGeneracion(token);
+  res.json({ ok: true, estado: estadoVideo(token).estado });
+});
 
 app.get('/api/video/:token/estado', (req, res) => {
   const t = req.params.token;
@@ -401,7 +441,15 @@ p{opacity:.75}.spin{font-size:2rem;animation:g 1.2s linear infinite;display:inli
   if (e.estado === 'error') {
     return res.type('html').send(pagina('<h1>No pudimos generar tu video</h1><p>La pantalla no llegó a enviarlo. Probá cantar de nuevo, ¡y gracias por participar!</p>'));
   }
-  if (e.estado === 'procesando') {
+  if (e.estado === 'vencido') {
+    return res.type('html').send(pagina('<h1>Este video ya no está disponible</h1><p>La pantalla guarda la grabación unos minutos esperando que la pidas. ¡Probá cantar de nuevo!</p>'));
+  }
+  if (e.estado === 'disponible') {
+    return res.type('html').send(pagina(`<h1>🎥 ¿Querés tu video?</h1><p>Tu canción se grabó. Generarlo tarda como un minuto.</p>
+<a class="btn" href="#" id="gen">🎬 Generar mi video</a>
+<script>document.getElementById('gen').onclick=async(ev)=>{ev.preventDefault();ev.target.textContent='Pidiéndolo…';await fetch('/api/video/${a}/generar',{method:'POST'}).catch(()=>{});location.reload()}</script>`));
+  }
+  if (e.estado === 'procesando' || e.estado === 'solicitado') {
     return res.type('html').send(pagina(`<h1><span class="spin">⏳</span> Procesando tu video…</h1><p>Puede tardar un minuto. Esta página se actualiza sola.</p>${recarga(5000)}`));
   }
   res.type('html').send(pagina(`<h1><span class="spin">⏳</span> Preparando tu video…</h1><p>La pantalla lo está enviando. Esta página se actualiza sola.</p>${recarga(4000)}`));
@@ -592,7 +640,13 @@ io.on('connection', (socket) => {
   }));
   socket.on('pantalla:retoResponder', soloPantalla((d = {}) => escenario.pantallaRetoResponder(d)));
   socket.on('pantalla:retoFin', soloPantalla((d = {}) => escenario.pantallaRetoFin(d)));
-  socket.on('pantalla:videoError', soloPantalla(({ token } = {}) => { if (idOk(token) && videoTokens.has(token)) videoErrores.set(token, 'subida'); }));
+  socket.on('pantalla:videoError', soloPantalla(({ token, motivo } = {}) => { if (idOk(token) && videoTokens.has(token)) videoErrores.set(token, motivo === 'vencido' ? 'vencido' : 'subida'); }));
+  // la pantalla grabo la performance y la tiene en memoria: se genera solo si la persona lo pide
+  socket.on('pantalla:videoGrabado', soloPantalla(({ token } = {}) => {
+    if (!idOk(token) || !videoTokens.has(token)) return;
+    videoDisponibles.set(token, Date.now());
+    if (videoPedidos.has(token)) avisarPantallaQueSuba(token); // lo habian pedido antes de que termine de guardarse
+  }));
   socket.on('pantalla:fin', soloPantalla(({ progreso } = {}) => escenario.pantallaFin({ progreso: Number(progreso) })));
   // la cancion se confirma con la mano, en el escenario
   // la pantalla es la que suena: ella dice si el audio realmente cargo / se puede reproducir

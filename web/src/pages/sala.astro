@@ -179,9 +179,11 @@ import Base from '../layouts/Base.astro';
         <p class="contadores" id="resReacc"></p>
       </div>
       <div class="tarjeta">
-        <p class="kicker" id="resVideoTitulo">🎥 Procesando tu video…</p>
-        <p class="chico" id="resVideoEstado">Puede tardar un minuto. Te avisamos acá apenas esté listo.</p>
+        <p class="kicker" id="resVideoTitulo">🎥 Guardando tu grabación…</p>
+        <p class="chico" id="resVideoEstado">Tu canción se graba siempre; vos elegís si querés generar el video.</p>
         <a id="resVideo" class="boton" href="#" target="_blank" rel="noopener" hidden>▶ Ver / descargar</a>
+        <button id="btnGenerarVideo" class="boton" hidden>🎬 Generar mi video</button>
+        <button id="btnNoVideo" class="link" hidden>No, gracias</button>
       </div>
       <button id="btnDeNuevo" class="boton">🎤 Cantar de nuevo</button>
       <button id="btnSeguirMirando" class="link">Seguir mirando</button>
@@ -269,6 +271,7 @@ import Base from '../layouts/Base.astro';
     }
     .boton.chicoBtn { font-size: 1rem; padding: 0.7rem 1rem; margin-top: 0.6rem; }
     .boton:disabled { opacity: 0.55; }
+    #btnGenerarVideo[hidden], #btnNoVideo[hidden] { display: none; }
     .syncFila { display: flex; gap: 0.5rem; }
     .syncFila .boton { flex: 1; }
     .syncBox .chico { margin: 0.2rem 0; }

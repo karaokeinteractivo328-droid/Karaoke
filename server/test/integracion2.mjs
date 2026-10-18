@@ -67,6 +67,8 @@ function cliente(rol, auth) {
   s.estado = null;
   s.yo = null;
   s.resultados = [];
+  s.subir = []; // ordenes de subir un video (solo las recibe la pantalla)
+  s.on('video:subir', (d) => s.subir.push(d));
   s.on('estado', (e) => { s.estado = e; });
   s.on('yo', (y) => { s.yo = y; });
   s.on('reto:resultado', (r) => s.resultados.push(r));
@@ -197,13 +199,30 @@ try {
   ok(fan.yo?.videoToken == null, 'el resto del público no lo ve');
 
   let est = await (await fetch(`${BASE}/api/video/${tokA}/estado`)).json();
-  ok(est.estado === 'esperando', `antes de la subida: "${est.estado}"`);
+  ok(est.estado === 'guardando', `al terminar la cancion la pantalla todavia esta guardando la grabacion: "${est.estado}"`);
   const malo = await fetch(`${BASE}/api/video/${'f'.repeat(32)}`, { method: 'POST', headers: { 'Content-Type': 'video/webm' }, body: Buffer.from('x') });
   ok(malo.status === 403, 'token que el server no emitio: subida rechazada (403)');
   est = await (await fetch(`${BASE}/api/video/${'f'.repeat(32)}/estado`)).json();
   ok(est.estado === 'desconocido', 'token ajeno: "desconocido"');
   const noPage = await fetch(`${BASE}/video/${'f'.repeat(32)}`);
   ok(noPage.status === 404, 'pagina de un video que no existe: 404');
+
+  // El video SIEMPRE se graba, pero solo se genera si la persona lo pide
+  pantalla.emit('pantalla:videoGrabado', { token: tokA });
+  await espera(300);
+  est = await (await fetch(`${BASE}/api/video/${tokA}/estado`)).json();
+  ok(est.estado === 'disponible', `la pantalla avisa que lo tiene guardado: "${est.estado}"`);
+  const pagDisp = await (await fetch(`${BASE}/video/${tokA}`)).text();
+  ok(pagDisp.includes('Generar mi video'), 'el link/QR muestra el boton "Generar mi video" (no lo genera solo)');
+  await espera(600);
+  ok(pantalla.subir.length === 0, 'mientras nadie lo pide, la pantalla NO sube nada');
+  const genMalo = await fetch(`${BASE}/api/video/${'f'.repeat(32)}/generar`, { method: 'POST' });
+  ok(genMalo.status === 404, 'pedir un video que no existe: 404');
+  const gen = await (await fetch(`${BASE}/api/video/${tokA}/generar`, { method: 'POST' })).json();
+  await espera(400);
+  ok(gen.ok && pantalla.subir.length === 1 && pantalla.subir[0].token === tokA, 'al pedirlo, el server le ordena a la pantalla que lo suba');
+  est = await (await fetch(`${BASE}/api/video/${tokA}/estado`)).json();
+  ok(est.estado === 'solicitado', `mientras la pantalla lo sube: "${est.estado}"`);
 
   const webm = join(tmpdir(), `karaoke-test-${Date.now()}.webm`);
   await crearWebm(webm);
@@ -251,7 +270,17 @@ try {
   const ajeno = await fetch(`${BASE}/video/${tokB}.mp4`);
   ok(ajeno.status === 404, 'el video de A no aparece en el link de B (B todavia no subio nada)');
   est = await (await fetch(`${BASE}/api/video/${tokB}/estado`)).json();
-  ok(est.estado === 'esperando', 'B: esperando su propia subida');
+  ok(est.estado === 'guardando', 'B: su grabacion todavia se esta guardando');
+  // pidio el video ANTES de que la pantalla termine de guardarlo: se genera apenas esta disponible
+  await fetch(`${BASE}/api/video/${tokB}/generar`, { method: 'POST' });
+  const antesB = pantalla.subir.length;
+  pantalla.emit('pantalla:videoGrabado', { token: tokB });
+  await espera(400);
+  ok(pantalla.subir.length === antesB + 1 && pantalla.subir.at(-1).token === tokB, 'si lo pidio antes de que termine de guardarse, la orden sale apenas esta disponible');
+  pantalla.emit('pantalla:videoError', { token: tokB, motivo: 'vencido' });
+  await espera(300);
+  est = await (await fetch(`${BASE}/api/video/${tokB}/estado`)).json();
+  ok(est.estado === 'error' && est.motivo === 'vencido', 'si la pantalla ya no tiene la grabacion (se recargo), el celu ve un error claro');
   pantalla.emit('pantalla:videoError', { token: tokB });
   await espera(200);
   est = await (await fetch(`${BASE}/api/video/${tokB}/estado`)).json();

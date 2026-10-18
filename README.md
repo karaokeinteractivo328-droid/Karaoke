@@ -254,8 +254,12 @@ guardan en el leaderboard.
 
 ### Video privado
 
-Al terminar, la pantalla graba un **video compuesto** (cámara + letra) con **audio de la
-canción + la voz**, lo sube al server y se convierte a **.mp4** con ffmpeg. El link
+La pantalla **siempre graba** un **video compuesto** (cámara + letra) con **audio de la
+canción + la voz**, pero **solo se genera si la persona lo pide**: al terminar, el celu muestra
+**🎬 Generar mi video** (o "No, gracias"). Recién ahí la pantalla lo sube al server y se convierte
+a **.mp4** con ffmpeg. La pantalla guarda la grabación en memoria unos 20 minutos (las últimas 3).
+En la grabación la **voz va más fuerte que la música** (música ×0,3, voz ×2,4, con compresor); los
+parlantes no se tocan. Con YouTube la música no se graba (solo lo que el micrófono escucha). El link
 lleva un token de 32 caracteres que solo recibe la persona (en su celu y en el QR del
 resultado). Solo se acepta una subida por performance, hasta 150 MB, y los videos se
 **borran a las 6 horas**.

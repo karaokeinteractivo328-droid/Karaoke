@@ -350,7 +350,7 @@ function renderResultado() {
 // El video de cada performance tiene su propio token y su propio estado en el
 // server: esperando -> procesando -> listo (o error). El celu lo consulta solo
 // y avisa cuando esta listo, sin que la persona tenga que recargar nada.
-let video = { token: '', estado: 'esperando' };
+let video = { token: '', estado: 'guardando', omitido: '' };
 
 function pintarVideo() {
   const link = $('resVideo');
@@ -361,32 +361,81 @@ function pintarVideo() {
     return;
   }
   link.href = `${SOCKET_URL}/video/${yo.videoToken}`;
-  const e = video.token === yo.videoToken ? video.estado : 'esperando';
-  $('resVideoTitulo').textContent =
-    e === 'listo' ? '🎥 Tu video está listo' : e === 'error' || e === 'desconocido' ? '🎥 Tu video' : '🎥 Procesando tu video…';
+  const e = video.token === yo.videoToken ? video.estado : 'guardando';
+  const omitido = video.omitido === yo.videoToken && e === 'disponible';
+  const titulo = {
+    guardando: '🎥 Guardando tu grabación…',
+    disponible: omitido ? '🎥 Sin video esta vez' : '🎥 ¿Querés tu video?',
+    solicitado: '🎥 Pidiendo tu video…',
+    procesando: '🎥 Generando tu video…',
+    listo: '🎥 Tu video está listo',
+    error: '🎥 Tu video',
+    vencido: '🎥 Tu video',
+    desconocido: '🎥 Tu video',
+  }[e] || '🎥 Tu video';
+  const texto = {
+    guardando: 'Tu canción se graba siempre; en un momento vas a poder elegir si generás el video.',
+    disponible: omitido
+      ? 'Listo: no se genera el video de esta canción.'
+      : 'Se grabó tu canción. Generarlo tarda como un minuto. Es privado y se borra a las 6 horas.',
+    solicitado: 'La pantalla lo está enviando…',
+    procesando: 'Puede tardar un minuto. Te avisamos acá apenas esté listo.',
+    listo: 'Es privado: solo lo ves con este link. Se borra en 6 horas.',
+    error: 'No pudimos prepararlo del todo. Tocá el botón por si se puede ver igual.',
+    vencido: 'La pantalla ya no tiene la grabación guardada (se guarda unos minutos). ¡Cantá de nuevo!',
+    desconocido: 'El video ya no está.',
+  }[e] || '';
+  $('resVideoTitulo').textContent = titulo;
+  txt.textContent = texto;
   link.hidden = !(e === 'listo' || e === 'error');
   link.textContent = e === 'listo' ? '▶ Ver / descargar' : 'Probar abrir mi video';
-  txt.textContent =
-    e === 'listo'
-      ? 'Es privado: solo lo ves con este link. Se borra en 6 horas.'
-      : e === 'error'
-        ? 'No pudimos prepararlo del todo. Tocá el botón por si se puede ver igual.'
-        : e === 'desconocido'
-          ? 'El video ya no está.'
-          : 'Puede tardar un minuto. Te avisamos acá apenas esté listo.';
+  $('btnGenerarVideo').hidden = !(e === 'disponible' && !omitido);
+  $('btnNoVideo').hidden = !(e === 'disponible' && !omitido);
 }
 
-let consultando = false;
-async function consultarVideo() {
+$('btnGenerarVideo').addEventListener('click', async () => {
   const token = yo?.videoToken;
-  if (!token || consultando || (video.token === token && (video.estado === 'listo' || video.estado === 'desconocido'))) return;
+  if (!token) return;
+  video = { token, estado: 'solicitado', omitido: '' };
+  pintarVideo();
+  try {
+    const r = await fetch(`${SOCKET_URL}/api/video/${token}/generar`, { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) {
+      mostrarAviso(j.error || 'No se pudo pedir el video', 5000);
+      video = { token, estado: r.status === 410 ? 'vencido' : 'error', omitido: '' };
+      pintarVideo();
+      return;
+    }
+  } catch {
+    mostrarAviso('Sin conexión: probá de nuevo', 4000);
+    video = { token, estado: 'disponible', omitido: '' };
+    pintarVideo();
+    return;
+  }
+  consultarVideo(true);
+});
+$('btnNoVideo').addEventListener('click', () => {
+  video = { ...video, omitido: yo?.videoToken || '' };
+  pintarVideo();
+});
+
+let consultando = false;
+let ultimaConsultaVideo = 0;
+async function consultarVideo(forzar = false) {
+  const token = yo?.videoToken;
+  const terminal = video.token === token && ['listo', 'desconocido', 'vencido'].includes(video.estado);
+  if (!token || consultando || terminal) return;
+  // esperando que la persona decida: no hace falta preguntar a cada rato
+  if (!forzar && video.token === token && video.estado === 'disponible' && Date.now() - ultimaConsultaVideo < 15_000) return;
+  ultimaConsultaVideo = Date.now();
   consultando = true;
   try {
     const r = await fetch(`${SOCKET_URL}/api/video/${token}/estado`);
     const j = await r.json();
     if (token !== yo?.videoToken) return;
     const previo = video.token === token ? video.estado : '';
-    video = { token, estado: j.estado };
+    video = { token, estado: j.estado, omitido: video.token === token ? video.omitido : '' };
     if (j.estado === 'listo' && previo !== 'listo') {
       vibrar([80, 50, 80]);
       mostrarAviso('🎥 ¡Tu video está listo!', 6000);
