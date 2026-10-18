@@ -524,11 +524,23 @@ function fallarAudio(motivo) {
 // Letra que no estaba al precargar pero el server consiguio despues (se vuelve a pedir al empezar)
 let lrcTardio = null;
 const letraDe = (id, pre) => pre?.lrc || (lrcTardio?.id === id ? lrcTardio.texto : null);
-// La letra de la app (LRCLIB) solo se dibuja si va a salir a tiempo: el video dura casi igual que la
-// letra, o alguien ya la alineo a mano para esa cancion. Si no, se muestra el video GRANDE con su
-// propia letra (siempre sincronizada) y la de la app queda lista para activarse al alinearla.
+// El video de YouTube SIEMPRE va chico (200x200, casi transparente) y la letra la dibuja la app.
+// `letraConfiable` = el video dura casi igual que la letra, o alguien ya la alineo a mano: si no lo es,
+// la letra puede salir corrida y se avisa (discreto) que se alinea desde el celu con el boton 🎯.
 const letraConfiableDe = (id, pre) => (lrcTardio?.id === id && !pre?.lrc ? lrcTardio.confiable : !!pre?.meta?.letraConfiable);
-const modoVideoDe = (id, pre) => (letraDe(id, pre) && letraConfiableDe(id, pre) ? 'chico' : 'grande');
+const modoVideoDe = () => 'chico';
+
+const avisoSync = $('#avisoSync');
+function pintarAvisoSync(id, pre) {
+  const hayLetra = !!letraDe(id, pre);
+  const texto = !hayLetra
+    ? 'Esta canción no tiene letra sincronizada'
+    : letraConfiableDe(id, pre)
+      ? ''
+      : 'Si la letra no va con la voz: tocá 🎯 en tu celu cuando arranque la voz';
+  avisoSync.textContent = texto;
+  avisoSync.hidden = !texto;
+}
 
 async function calentarYouTube(actual) {
   const c = actual?.cancion;
@@ -544,8 +556,7 @@ async function calentarYouTube(actual) {
       }
     } catch {}
   }
-  // con letra sincronizada: letra de karaoke nuestra + video chico; sin ella, el video grande (trae la suya)
-  body.dataset.yt = modoVideoDe(c.id, pre);
+  body.dataset.yt = modoVideoDe();
   reproductorYT().then((r) => r.precalentar(c.videoId)).catch((e) => errorAudio(`YouTube: no se pudo precalentar (${e.message})`));
 }
 
@@ -588,8 +599,9 @@ async function arrancarCancion(actual) {
   reloj.iniciar({ conAudio: esYT || !!fuente });
   if (esYT) {
     // reproduccion SOLO con el reproductor oficial embebido: no se descarga ni se extrae audio
-    body.dataset.yt = modoVideoDe(id, pre);
-    logAudio(`YouTube ${meta.videoId}: play (${body.dataset.yt === 'chico' ? 'letra de la app + video chico' : 'letra dentro del video'}${letraDe(id, pre) && body.dataset.yt === 'grande' ? ' · letra de la app sin alinear' : ''})`);
+    body.dataset.yt = modoVideoDe();
+    pintarAvisoSync(id, pre);
+    logAudio(`YouTube ${meta.videoId}: play (letra de la app ${letraDe(id, pre) ? (letraConfiableDe(id, pre) ? 'a tiempo' : 'sin alinear') : 'NO disponible'} + video chico)`);
     (async () => {
       try {
         const r = await reproductorYT();
@@ -757,8 +769,7 @@ function alinearConLaVoz() {
   const primera = letras.find((l) => l.texto);
   if (!primera) return flash('esta canción no tiene letra para alinear');
   fijarOffset(desfaseParaAlinear(reloj.letra(0), primera.tiempo));
-  // ya esta alineada con ESTE video: desde ahora se usa la letra de la app (video chico)
-  if (body.dataset.yt === 'grande') body.dataset.yt = 'chico';
+  avisoSync.hidden = true; // ya esta alineada con ESTE video
 }
 
 addEventListener('keydown', (e) => {
@@ -941,6 +952,7 @@ function detenerCancion() {
     audio.load();
   } catch {}
   yt?.detener();
+  avisoSync.hidden = true;
   delete body.dataset.yt;
   fuenteActiva = audio;
 }

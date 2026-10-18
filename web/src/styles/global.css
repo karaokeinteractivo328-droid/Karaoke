@@ -798,15 +798,6 @@ body[data-estado="RESULT"]    .ui[data-estado="RESULT"] {
   pointer-events: none;
 }
 #ytWrap iframe { width: 100%; height: 100%; display: block; border: 0; }
-/* la letra viene dentro del video: se muestra grande, centrado, debajo de la pildora del cantante */
-body[data-yt="grande"] #ytWrap {
-  top: max(11vmin, 84px);
-  left: 50%;
-  width: min(86vw, calc((100vh - 24vmin) * 16 / 9));
-  height: auto;
-  aspect-ratio: 16 / 9;
-  transform: translateX(-50%);
-}
 /* la letra la dibujamos nosotros: el video queda en el MINIMO que permite YouTube (200x200 px,
    visible y sin nada encima). No achicar mas ni esconderlo: incumple sus condiciones. */
 body[data-yt="chico"] #ytWrap {
@@ -822,5 +813,23 @@ body[data-yt="chico"] #ytWrap {
      condiciones del reproductor embebido de YouTube: para un uso publico volver a 1. */
   opacity: var(--yt-opacidad, 0.04);
 }
-/* sin letra propia no hay nada que dibujar encima del video */
-body[data-yt="grande"] #letra { visibility: hidden; }
+/* aviso discreto: la letra de la app puede salir corrida / no hay letra sincronizada */
+#avisoSync {
+  position: fixed;
+  left: 50%;
+  bottom: 1.4vmin;
+  transform: translateX(-50%);
+  z-index: 8;
+  margin: 0;
+  max-width: 70vw;
+  padding: 0.25rem 0.9rem;
+  border-radius: 999px;
+  background: rgba(31, 29, 26, 0.72);
+  color: #fff;
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: clamp(0.7rem, 1.8vmin, 1.05rem);
+  text-align: center;
+  pointer-events: none;
+}
+#avisoSync[hidden] { display: none; }

@@ -260,7 +260,11 @@ export function crearCatalogo({
     });
     await Promise.race([Promise.all(tareas), new Promise((r) => setTimeout(r, C.ESPERA_SINCRONIA_MS))]);
   }
-  const bonoSincronia = (i) => (i.karaoke?.esKaraoke && i.sincronia?.nivel === 'alta' ? 30 : 0);
+  // Con el video siempre chico, lo que se lee es la letra de la app: sin letra es una mala eleccion.
+  const bonoSincronia = (i) => {
+    if (!i.karaoke?.esKaraoke) return 0;
+    return { alta: 30, media: 10, sin_letra: -20 }[i.sincronia?.nivel] ?? 0;
+  };
 
   // Una sola busqueda de letra por cancion (la eleccion la dispara en segundo plano y la
   // preparacion del audio la espera un rato: asi, cuando la cancion figura "lista", la letra ya esta).

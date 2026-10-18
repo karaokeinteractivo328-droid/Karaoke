@@ -593,6 +593,12 @@ function tarjetaCancion(c) {
     k.textContent = '🎯 LETRA A TIEMPO';
     etiquetas.append(k);
   }
+  if (c.sincronia?.nivel === 'sin_letra') {
+    const k = document.createElement('span');
+    k.className = 'tagSinLetra';
+    k.textContent = 'SIN LETRA';
+    etiquetas.append(k);
+  }
   if (etiquetas.childElementCount) info.append(etiquetas);
   const btn = document.createElement('button');
   btn.type = 'button';

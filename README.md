@@ -141,8 +141,10 @@ mismo tema con tiempos muy distintos (la 1ª línea de *Tití Me Preguntó* est�
 otra). Por eso:
 - **Se elige la versión de la letra por duración** y al buscar se consulta LRCLIB para cada resultado: los
   videos que duran casi igual que la letra (≤ 3 s) salen primero y llevan **🎯 LETRA A TIEMPO**.
-- **La letra de la app solo se dibuja si es confiable** (video de duración casi igual, o ya alineada a mano
-  para esa canción). Si no, se muestra el **video grande con su propia letra**, que siempre está sincronizada.
+- **El video va SIEMPRE chico** (200×200, casi transparente) y la letra es siempre la de la app. Si la
+  letra no es confiable (video de duración distinta y sin alinear) aparece un aviso discreto abajo para
+  alinearla desde el celu; si LRCLIB no tiene letra, el aviso dice "Esta canción no tiene letra
+  sincronizada" y en la lista esos temas bajan y llevan **SIN LETRA**.
 - **Alinear una vez y queda guardado**: en el celu de quien canta (o el copiloto) **🎯** al arrancar la voz
   alinea la letra de la app, la activa (video chico) y guarda el desfase por canción (`offsets.json`): la
   próxima vez ya sale a tiempo. Más **⏪ Va atrasada / Va adelantada ⏩** (±0,5 s). En la pantalla:
