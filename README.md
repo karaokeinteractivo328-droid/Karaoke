@@ -60,7 +60,7 @@ npm run dev
 ### Tests
 
 ```bash
-npm -w server test                  # 108 casos con reloj falso: fila, audio, catálogo, retos, palabra
+npm -w server test                  # 111 casos con reloj falso: fila, audio, catálogo, retos, palabra
 npm -w web test                     # 91 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
 npm -w server run test:integracion  # sockets REALES (3 suites, ver abajo)
 ```
@@ -133,15 +133,22 @@ contra lo que escribiste y que la duración sea plausible. No es estricto: solo 
 claramente inservible y **nunca se devuelve una lista vacía si YouTube devolvió algo** (se
 muestran los mejores candidatos, los karaoke primero).
 
-**Letra a tiempo con el audio.** La letra de LRCLIB viene con los tiempos del tema original y muchos
-videos de karaoke tienen una intro distinta, así que puede salir corrida. El audio de YouTube no se
-puede "escuchar" para alinearla sola, por eso se ajusta en vivo y **el desfase queda guardado por
-canción** (en el server, `offsets.json`, y en la pantalla): la próxima vez ya sale a tiempo.
-- En el celu de quien canta (o del copiloto): **🎯 ¡Ahora empieza la primera línea!** (tocalo cuando
-  arranca la voz: la letra se alinea sola) y **⏪ Va atrasada / Va adelantada ⏩** (±0,5 s).
-- En la pantalla: `Enter` = alinear, `[` / `]` = ±0,2 s.
-- Para elegir la letra correcta: se prueba artista+tema y variantes, se comparan palabras sin importar el
-  orden del título y se acepta hasta 90 s de diferencia de duración (gana la más cercana).
+**Letra a tiempo con el audio (lo que se averiguó).** El audio de YouTube no se puede "escuchar" para
+alinear la letra solo, y adivinar el desfase por la duración **no sirve**: medido con videos reales, uno de
+la misma duración que la letra de LRCLIB calza con desfase ≈ 0, pero uno 13 s más largo (con intro) tenía la
+voz entrando ~4-5 s después (un estimador por duración daría ~12 s). Además LRCLIB tiene varias versiones de un
+mismo tema con tiempos muy distintos (la 1ª línea de *Tití Me Preguntó* está a los 10 s en una y a los 42 s en
+otra). Por eso:
+- **Se elige la versión de la letra por duración** y al buscar se consulta LRCLIB para cada resultado: los
+  videos que duran casi igual que la letra (≤ 3 s) salen primero y llevan **🎯 LETRA A TIEMPO**.
+- **La letra de la app solo se dibuja si es confiable** (video de duración casi igual, o ya alineada a mano
+  para esa canción). Si no, se muestra el **video grande con su propia letra**, que siempre está sincronizada.
+- **Alinear una vez y queda guardado**: en el celu de quien canta (o el copiloto) **🎯** al arrancar la voz
+  alinea la letra de la app, la activa (video chico) y guarda el desfase por canción (`offsets.json`): la
+  próxima vez ya sale a tiempo. Más **⏪ Va atrasada / Va adelantada ⏩** (±0,5 s). En la pantalla:
+  `Enter` = alinear, `[` / `]` = ±0,2 s.
+- Para elegir la letra: se prueba artista+tema y variantes, se comparan palabras sin importar el orden del
+  título y se acepta hasta 90 s de diferencia de duración (gana la más cercana).
 
 **Qué se guarda al elegir**: `videoId`, título, canal, miniatura, duración, `searchQuery`
 (con qué se lo encontró) y `karaokeScore` (+ `origen`, `esKaraoke`).

@@ -578,12 +578,22 @@ function tarjetaCancion(c) {
   art.className = 'art';
   art.textContent = `${c.canal || c.artista || ''}${c.duracion ? ` · ${mmss(c.duracion)}` : ''}`;
   info.append(titulo, art);
+  const etiquetas = document.createElement('span');
+  etiquetas.className = 'etiquetas';
   if (c.karaoke?.esKaraoke || c.fuente === 'local') {
     const k = document.createElement('span');
     k.className = 'tagKaraoke';
     k.textContent = c.fuente === 'local' ? 'LISTA' : 'KARAOKE';
-    info.append(k);
+    etiquetas.append(k);
   }
+  // este video dura casi igual que la letra de lrclib: la letra de la app sale a tiempo
+  if (c.sincronia?.nivel === 'alta') {
+    const k = document.createElement('span');
+    k.className = 'tagSync';
+    k.textContent = '🎯 LETRA A TIEMPO';
+    etiquetas.append(k);
+  }
+  if (etiquetas.childElementCount) info.append(etiquetas);
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'elegir';

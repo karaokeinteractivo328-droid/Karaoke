@@ -52,6 +52,10 @@ export function crearCatalogo({
   const C = {
     POR_PAGINA_LOCAL: 12,
     TIMEOUT_LRCLIB_MS: 6_000,
+    TOLERANCIA_SINCRONIA_S: 3, // video y letra duran casi igual: la letra de lrclib cae con el video (medido en videos reales)
+    MAX_SINCRONIA: 12, // a cuantos resultados se les consulta la letra al buscar
+    ESPERA_SINCRONIA_MS: 4_000, // cuanto se espera esa consulta antes de mostrar los resultados
+    CACHE_LRCLIB_MS: 6 * 3600_000,
     ESPERA_LETRA_MS: 12_000, // cuanto se espera la letra antes de dar la cancion por lista
     TOLERANCIA_LETRA_S: 25, // diferencia de duracion en la que la letra se da por buena
     TOLERANCIA_LETRA_AMPLIA_S: 90, // mas alla de esto no se usa; entre ambas se usa igual (la version karaoke suele tener intro/final extra)
@@ -98,7 +102,11 @@ export function crearCatalogo({
     try {
       const r = await youtube.buscar(consulta, pageToken);
       const nombres = new Set(loc.map((x) => `${normalizar(x.artista)}|${normalizar(x.titulo)}`));
-      salida.items = [...loc, ...r.items.filter((x) => !nombres.has(`${normalizar(x.canal)}|${normalizar(x.titulo)}`))];
+      const yt = r.items.filter((x) => !nombres.has(`${normalizar(x.canal)}|${normalizar(x.titulo)}`));
+      await enriquecerSincronia(yt);
+      // karaoke primero y, dentro de eso, los de letra sincronizada (orden estable para el resto)
+      yt.sort((a, b) => (b.karaoke?.esKaraoke ? 1 : 0) - (a.karaoke?.esKaraoke ? 1 : 0) || (b.karaoke?.score ?? 0) + bonoSincronia(b) - ((a.karaoke?.score ?? 0) + bonoSincronia(a)));
+      salida.items = [...loc, ...yt];
       salida.nextPageToken = r.nextPageToken;
       salida.cuota = r.cuota;
     } catch (e) {
@@ -151,27 +159,42 @@ export function crearCatalogo({
   }
 
   // ------------------------------------------------------------------- letra
+  const cacheLrclib = new Map(); // ruta -> { t, datos } | { promesa }
   async function lrclib(ruta) {
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), C.TIMEOUT_LRCLIB_MS);
+    const hit = cacheLrclib.get(ruta);
+    if (hit?.promesa) return hit.promesa;
+    if (hit && Date.now() - hit.t < C.CACHE_LRCLIB_MS) return hit.datos;
+    const promesa = (async () => {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), C.TIMEOUT_LRCLIB_MS);
+      try {
+        const r = await fetchFn(`${C.LRCLIB}${ruta}`, { signal: ctl.signal, headers: { 'Lrclib-Client': 'karaoke-interactivo (proyecto universitario)' } });
+        if (!r.ok) throw new Error(`lrclib respondio ${r.status}`);
+        return await r.json();
+      } finally {
+        clearTimeout(t);
+      }
+    })();
+    cacheLrclib.set(ruta, { promesa });
     try {
-      const r = await fetchFn(`${C.LRCLIB}${ruta}`, { signal: ctl.signal, headers: { 'Lrclib-Client': 'karaoke-interactivo (proyecto universitario)' } });
-      if (!r.ok) throw new Error(`lrclib respondio ${r.status}`);
-      return await r.json();
-    } finally {
-      clearTimeout(t);
+      const datos = await promesa;
+      cacheLrclib.set(ruta, { t: Date.now(), datos });
+      if (cacheLrclib.size > 500) cacheLrclib.delete(cacheLrclib.keys().next().value);
+      return datos;
+    } catch (e) {
+      cacheLrclib.delete(ruta);
+      throw e;
     }
   }
 
-  // Letra sincronizada para el video elegido (mejor esfuerzo). Se prueba de lo mas preciso
+  // Mejor letra sincronizada de lrclib para un video (o null). Se prueba de lo mas preciso
   // (artista + tema) a lo mas amplio. El titulo del video es desordenado ("TEMA - ARTISTA | KARAOKE",
   // "ARTISTA - TEMA (Karaoke Version)"), asi que se compara por PALABRAS sin importar el orden.
-  // Duracion: una version karaoke suele tener intro/final distintos al tema original, por eso se
-  // acepta hasta TOLERANCIA_LETRA_AMPLIA_S de diferencia (gana la mas cercana); la pantalla permite
-  // ajustar el desfase en vivo con [ y ].
+  // Gana la de duracion mas cercana al video (y, a igualdad, la del mismo artista): lrclib tiene
+  // varias versiones del mismo tema con tiempos muy distintos (p. ej. 10 s vs 42 s para la 1ra linea).
   const palabras = (t) => normalizar(t).split(' ').filter((w) => w.length > 1);
-  async function buscarLetra(meta) {
-    const { artista, tema } = separarArtistaTema(meta.titulo);
+  async function elegirLetra(titulo, duracion) {
+    const { artista, tema } = separarArtistaTema(titulo);
     const consulta = `${artista} ${tema}`.trim();
     if (consulta.length < 3) return null;
     const rutas = [];
@@ -185,7 +208,7 @@ export function crearCatalogo({
       const nombre = new Set(palabras(`${r.artistName || ''} ${r.trackName || r.name || ''}`));
       const halladas = buscadas.filter((w) => nombre.has(w)).length;
       if (!buscadas.length || halladas / buscadas.length < 0.6) return null; // no es el mismo tema
-      const dif = Math.abs(Number(r.duration) - Number(meta.duracion));
+      const dif = Math.abs(Number(r.duration) - Number(duracion));
       if (!(dif <= C.TOLERANCIA_LETRA_AMPLIA_S)) return null;
       const mismoArtista = !!nArtista && palabras(r.artistName).includes(nArtista);
       return { r, dif, mismoArtista, orden: dif - (mismoArtista ? 5 : 0) + (dif > C.TOLERANCIA_LETRA_S ? 1000 : 0) };
@@ -193,11 +216,19 @@ export function crearCatalogo({
     let mejor = null;
     for (const ruta of rutas) {
       let crudo;
-      try { crudo = await lrclib(ruta); } catch (e) { log(`[letra] ${meta.id}: lrclib fallo (${e.message})`); continue; }
+      try { crudo = await lrclib(ruta); } catch (e) { log(`[letra] lrclib fallo (${e.message})`); continue; }
       const candidatos = (Array.isArray(crudo) ? crudo : []).map(puntuar).filter(Boolean).sort((x, y) => x.orden - y.orden);
       if (candidatos.length && (!mejor || candidatos[0].orden < mejor.orden)) mejor = candidatos[0];
-      if (mejor && mejor.dif <= C.TOLERANCIA_LETRA_S) break; // ya hay una muy buena
+      if (mejor && mejor.dif <= C.TOLERANCIA_SINCRONIA_S) break; // ya hay una que calza
     }
+    return mejor;
+  }
+
+  // Letra sincronizada para el video elegido (mejor esfuerzo). Hasta TOLERANCIA_LETRA_AMPLIA_S de
+  // diferencia de duracion se guarda igual, pero solo se la considera CONFIABLE (se dibuja la letra
+  // de la app) si dura casi igual que el video (nivel "alta") o si alguien ya la alineo a mano.
+  async function buscarLetra(meta) {
+    const mejor = await elegirLetra(meta.titulo, meta.duracion);
     if (!mejor) {
       meta.letraEstado = 'sin_letra';
       log(`[letra] ${meta.id}: sin letra sincronizada compatible (el video trae la suya)`);
@@ -209,9 +240,27 @@ export function crearCatalogo({
     meta.letraEstado = 'ok';
     meta.letraDesfase = Math.round(meta.duracion - mejor.r.duration);
     meta.letraAproximada = mejor.dif > C.TOLERANCIA_LETRA_S;
-    log(`[letra] ${meta.id}: letra de lrclib "${mejor.r.artistName} - ${mejor.r.trackName}" (duracion ${mejor.r.duration}s vs video ${meta.duracion}s${meta.letraAproximada ? ', aproximada' : ''})`);
+    meta.letraNivel = mejor.dif <= C.TOLERANCIA_SINCRONIA_S ? 'alta' : 'media';
+    log(`[letra] ${meta.id}: letra de lrclib "${mejor.r.artistName} - ${mejor.r.trackName}" (duracion ${mejor.r.duration}s vs video ${meta.duracion}s, sincronia ${meta.letraNivel})`);
     return meta.lrc;
   }
+
+  // Al buscar: a los primeros resultados se les mira si hay letra de lrclib que calce con la duracion
+  // del video. Los que calzan ("alta") suben en la lista y se marcan: son los que van a salir a tiempo.
+  async function enriquecerSincronia(items) {
+    const objetivo = items.filter((i) => i.fuente === 'youtube' && i.sincronia === undefined).slice(0, C.MAX_SINCRONIA);
+    if (!objetivo.length) return;
+    const tareas = objetivo.map(async (it) => {
+      try {
+        const m = await elegirLetra(it.titulo, it.duracion);
+        it.sincronia = m ? { nivel: m.dif <= C.TOLERANCIA_SINCRONIA_S ? 'alta' : 'media', dif: Math.round(m.dif) } : { nivel: 'sin_letra' };
+      } catch {
+        it.sincronia = null;
+      }
+    });
+    await Promise.race([Promise.all(tareas), new Promise((r) => setTimeout(r, C.ESPERA_SINCRONIA_MS))]);
+  }
+  const bonoSincronia = (i) => (i.karaoke?.esKaraoke && i.sincronia?.nivel === 'alta' ? 30 : 0);
 
   // Una sola busqueda de letra por cancion (la eleccion la dispara en segundo plano y la
   // preparacion del audio la espera un rato: asi, cuando la cancion figura "lista", la letra ya esta).
@@ -308,6 +357,9 @@ export function crearCatalogo({
       karaokeScore: c.karaokeScore ?? null,
       lrc: c.lrc,
       letraEstado: c.letraEstado || (c.lrc ? 'ok' : null),
+      letraNivel: c.letraNivel || null,
+      // la letra de la app se dibuja solo si va a salir a tiempo: dura casi igual que el video o alguien ya la alineo
+      letraConfiable: !!c.lrc && (c.letraNivel === 'alta' || offsets?.get(id) != null),
       audio: c.audio,
       audioRemoto: c.audioRemoto || null,
       offsetLetra: c.offsetLetra || 0,

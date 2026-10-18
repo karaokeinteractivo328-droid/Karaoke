@@ -81,6 +81,51 @@ test('buscar: la biblioteca local primero y despues YouTube (con thumbnail, cana
   await x.limpiar();
 });
 
+test('sincronia: los videos cuya duracion calza con la letra de lrclib se marcan "alta" y suben en la lista', async () => {
+  const lrclib = [{ id: 1, trackName: 'Tema', artistName: 'Artista', duration: 200, syncedLyrics: LRC, instrumental: false }];
+  const largo = { ...itemYT(1, 'Artista - Tema (Karaoke Version)'), duracion: 215 }; // 15 s mas largo: la letra saldria corrida
+  const justo = { ...itemYT(2, 'Artista - Tema (Karaoke)'), duracion: 201 }; // casi igual: calza
+  const sinLetra = { ...itemYT(3, 'Otro - Cosa (Karaoke)'), duracion: 180 };
+  const x = await armar({ lrclib, busqueda: () => ({ items: [largo, justo, sinLetra], nextPageToken: null }) });
+  const r = await x.cat.buscar('tema');
+  const yt = r.items.filter((i) => i.fuente === 'youtube');
+  assert.equal(yt[0].videoId, vid(2), 'el que calza con la letra va primero');
+  assert.equal(yt[0].sincronia.nivel, 'alta');
+  assert.equal(yt.find((i) => i.videoId === vid(1)).sincronia.nivel, 'media');
+  assert.ok(['media', 'sin_letra'].includes(yt.find((i) => i.videoId === vid(3)).sincronia.nivel));
+  await x.limpiar();
+});
+
+test('sincronia: la misma busqueda de letra no se repite (cache) y un lrclib caido no rompe la busqueda', async () => {
+  const x = await armar({ lrclib: [], busqueda: () => ({ items: [itemYT(1), itemYT(2, 'Tema 1 (Karaoke)')], nextPageToken: null }) });
+  await x.cat.buscar('tema');
+  const primeras = x.llamadas.lrclib.length;
+  await x.cat.buscar('tema 2');
+  assert.ok(x.llamadas.lrclib.length < primeras * 2, `segunda busqueda reutiliza la cache (${primeras} -> ${x.llamadas.lrclib.length})`);
+  await x.limpiar();
+});
+
+test('letra confiable: solo si dura casi igual que el video o si alguien ya la alineo a mano', async () => {
+  const guardados = new Map();
+  const offsets = { get: (id) => (guardados.has(id) ? guardados.get(id) : null), set: (id, v) => { guardados.set(id, v); return v; } };
+  const x = await armar({
+    offsets,
+    detalle: (id) => ({ videoId: id, titulo: 'Queen - Bohemian Rhapsody (Karaoke Version)', canal: 'Sing King', thumbnail: null, duracion: id === vid(21) ? 355 : 370 }),
+    lrclib: [{ id: 2, trackName: 'Bohemian Rhapsody', artistName: 'Queen', duration: 354, syncedLyrics: LRC, instrumental: false }],
+  });
+  const a = await x.cat.resolver(`yt-${vid(21)}`);
+  const b = await x.cat.resolver(`yt-${vid(22)}`);
+  await x.cat.asegurarAudio(a.id);
+  await x.cat.asegurarAudio(b.id);
+  assert.equal(x.cat.metaPublica(a.id).letraNivel, 'alta');
+  assert.equal(x.cat.metaPublica(a.id).letraConfiable, true, 'dura casi igual: la letra de la app cae con el video');
+  assert.equal(x.cat.metaPublica(b.id).letraNivel, 'media');
+  assert.equal(x.cat.metaPublica(b.id).letraConfiable, false, '16 s mas larga: no se sabe cuanto se corre -> se usa la letra del propio video');
+  x.cat.fijarOffset(b.id, 9.5);
+  assert.equal(x.cat.metaPublica(b.id).letraConfiable, true, 'despues de alinearla a mano ya se puede confiar');
+  await x.limpiar();
+});
+
 test('buscar: consulta vacia = biblioteca local, sin tocar YouTube (no gasta cuota)', async () => {
   const x = await armar();
   const r = await x.cat.buscar('');
