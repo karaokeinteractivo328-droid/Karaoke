@@ -119,7 +119,8 @@ function celu(token, nombre) {
 // la pantalla falsa: dice "ya cargue ese video" para lo que se le pide precargar (como pantalla.js)
 function pantalla({ autoLista = true } = {}) {
   const s = io(BASE, { query: { rol: 'pantalla', pid: 'p-' + Math.random() }, transports: ['websocket'], forceNew: true, reconnectionDelay: 200, reconnectionDelayMax: 500 });
-  s.estado = null; s.listas = new Set(); s.errores = new Map();
+  s.estado = null; s.listas = new Set(); s.errores = new Map(); s.syncs = [];
+  s.on('letra:sincronizar', (d) => s.syncs.push(d));
   s.on('estado', (e) => {
     s.estado = e;
     if (!autoLista) return;
@@ -205,6 +206,22 @@ try {
   ok((await A.pedir('turno:listo')).ok, 'Ana toca LISTO');
   await hasta(() => pan.estado?.etapa === 'PLAYING', 10000, 'PLAYING Ana');
   ok(pan.estado.actual?.cancion?.videoId === elegida.videoId, 'la pantalla recibe el videoId de lo que suena');
+
+  console.log('\n== 3b. Letra a tiempo: el que canta la alinea con la voz y el ajuste queda guardado');
+  const rAl = await A.pedir('letra:sincronizar', { accion: 'alinear' });
+  const rAj = await A.pedir('letra:sincronizar', { accion: 'ajustar', delta: 0.5 });
+  const rPub = await B.pedir('letra:sincronizar', { accion: 'alinear' });
+  await dormir(300);
+  ok(rAl.ok && rAj.ok, 'quien canta puede alinear y ajustar');
+  ok(pan.syncs.length === 2 && pan.syncs[0].accion === 'alinear' && pan.syncs[1].delta === 0.5, `la pantalla recibe las dos ordenes (${JSON.stringify(pan.syncs)})`);
+  ok(rPub.ok === false && pan.syncs.length === 2, 'el publico NO puede mover la letra');
+  pan.emit('pantalla:offset', { cancionId: elegida.id, offset: 12.04 });
+  await dormir(600);
+  const mOff = await (await api(`/api/cancion/${elegida.id}`)).json();
+  ok(mOff.offsetLetra === 12, `el desfase queda guardado para esa cancion (offsetLetra ${mOff.offsetLetra})`);
+  const { readFile } = await import('node:fs/promises');
+  const guardado = JSON.parse(await readFile(join(CACHE, 'offsets.json'), 'utf8').catch(() => '{}'));
+  ok(guardado[elegida.id] === 12, 'y en disco, para que sobreviva a un reinicio');
 
   console.log('\n== 4. El reproductor falla en plena performance: se cierra, no se canta en silencio');
   pan.emit('pantalla:audioFallo', { motivo: 'el navegador no deja sonar YouTube' });

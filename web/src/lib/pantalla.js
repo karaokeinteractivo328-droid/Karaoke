@@ -9,7 +9,7 @@
 
 import { conectar, SOCKET_URL } from './socket.js';
 import { parsearLRC, indiceActual, tiemposPalabras } from './lrc.js';
-import { crearReloj } from './reloj.js';
+import { crearReloj, desfaseParaAlinear } from './reloj.js';
 import { crearPrecarga } from './precarga.js';
 import { cargarApiYouTube, crearReproductorYouTube, ESTADO as YT_ESTADO } from './youtube.js';
 import { logAudio, logCancion, errorAudio, diagnostico } from './audioLog.js';
@@ -520,11 +520,26 @@ function fallarAudio(motivo) {
 
 // Cuenta regresiva (3-2-1): el reproductor de YouTube ya se muestra y carga el video en silencio,
 // asi cuando empieza la cancion solo hay que dar play desde el segundo 0.
-function calentarYouTube(actual) {
+// Letra que no estaba al precargar pero el server consiguio despues (se vuelve a pedir al empezar)
+let lrcTardio = null;
+const letraDe = (id, pre) => pre?.lrc || (lrcTardio?.id === id ? lrcTardio.texto : null);
+
+async function calentarYouTube(actual) {
   const c = actual?.cancion;
   if (c?.origen !== 'youtube' || !c.videoId) return;
   const pre = precarga.obtener(c.id);
-  body.dataset.yt = pre?.lrc ? 'chico' : 'grande';
+  lrcTardio = null;
+  if (!pre?.lrc) {
+    try {
+      const m = await buscarMeta(actual);
+      if (m?.lrc) {
+        const r = await fetch(absUrl(m.lrc));
+        if (r.ok) lrcTardio = { id: c.id, texto: await r.text() };
+      }
+    } catch {}
+  }
+  // con letra sincronizada: letra de karaoke nuestra + video chico; sin ella, el video grande (trae la suya)
+  body.dataset.yt = letraDe(c.id, pre) ? 'chico' : 'grande';
   reproductorYT().then((r) => r.precalentar(c.videoId)).catch((e) => errorAudio(`YouTube: no se pudo precalentar (${e.message})`));
 }
 
@@ -567,8 +582,9 @@ async function arrancarCancion(actual) {
   reloj.iniciar({ conAudio: esYT || !!fuente });
   if (esYT) {
     // reproduccion SOLO con el reproductor oficial embebido: no se descarga ni se extrae audio
-    body.dataset.yt = pre?.lrc ? 'chico' : 'grande';
-    logAudio(`YouTube ${meta.videoId}: play (${pre?.lrc ? 'letra propia + video chico' : 'letra dentro del video'})`);
+    const hayLetra = !!letraDe(id, pre);
+    body.dataset.yt = hayLetra ? 'chico' : 'grande';
+    logAudio(`YouTube ${meta.videoId}: play (${hayLetra ? 'letra propia + video chico' : 'letra dentro del video'})`);
     (async () => {
       try {
         const r = await reproductorYT();
@@ -630,7 +646,7 @@ async function arrancarCancion(actual) {
   loopId = setInterval(tickLetra, 60);
 
   // la letra ya viene con la precarga (si no, se baja ahora)
-  let texto = pre?.lrc;
+  let texto = letraDe(id, pre);
   if (!texto && meta?.lrc) {
     try { texto = await fetch(absUrl(meta.lrc)).then((r) => r.text()); } catch (e) { errorAudio(`letra: ${e.message}`); }
   }
@@ -714,17 +730,43 @@ function finDeCancion() {
   if (!espejo) socket.emit('pantalla:fin', { progreso });
 }
 
-// Ajuste fino de sincronía en vivo: [ y ]
+// --- Sincronia de la letra en vivo ---------------------------------------------
+// Los videos de karaoke suelen tener una intro (o un final) distinta al tema original y la letra de
+// LRCLIB sale corrida. No se puede "escuchar" el audio de YouTube para alinearla sola, asi que se
+// ajusta en vivo y el desfase queda guardado PARA ESA CANCION (en esta pantalla y en el server):
+// la proxima vez que se cante ya sale a tiempo.
+//   offsetLetra > 0  -> la letra sale mas tarde   (usar si la letra va ADELANTADA a la voz)
+//   offsetLetra < 0  -> la letra sale mas temprano (usar si la letra va ATRASADA)
+function fijarOffset(nuevo, aviso = true) {
+  offsetLetra = Math.round(Math.max(-60, Math.min(60, nuevo)) * 10) / 10;
+  idxLetra = -2;
+  try { localStorage.setItem(claveOffset(cancionId), String(offsetLetra)); } catch {}
+  if (!espejo && cancionId) socket.emit('pantalla:offset', { cancionId, offset: offsetLetra });
+  if (aviso) flash(`letra ${offsetLetra > 0 ? '+' : ''}${offsetLetra.toFixed(1)} s · guardado`);
+  console.log(`[letra] ${cancionId}: "offsetLetra": ${offsetLetra.toFixed(1)} (queda guardado para esta cancion)`);
+}
+
+// "La voz empieza AHORA la primera linea": el desfase es lo que falta para que la primera linea de
+// la letra caiga justo en este instante (menos lo que tarda quien toca en reaccionar).
+function alinearConLaVoz() {
+  const primera = letras.find((l) => l.texto);
+  if (!primera) return flash('esta canción no tiene letra para alinear');
+  fijarOffset(desfaseParaAlinear(reloj.letra(0), primera.tiempo));
+}
+
 addEventListener('keydown', (e) => {
   if (etapaActual !== 'PLAYING') return;
-  if (e.key === '[') offsetLetra -= 0.2;
-  else if (e.key === ']') offsetLetra += 0.2;
+  if (e.key === '[') fijarOffset(offsetLetra - 0.2);
+  else if (e.key === ']') fijarOffset(offsetLetra + 0.2);
+  else if (e.key === 'Enter') alinearConLaVoz();
   else return;
-  idxLetra = -2;
-  offsetLetra = Math.round(offsetLetra * 10) / 10;
-  try { localStorage.setItem(claveOffset(cancionId), String(offsetLetra)); } catch {}
-  flash(`letra ${offsetLetra > 0 ? '+' : ''}${offsetLetra.toFixed(1)} s · guardado`);
-  console.log(`[letra] ${cancionId}: "offsetLetra": ${offsetLetra.toFixed(1)} (queda guardado en esta pantalla; pegalo en canciones.json para fijarlo)`);
+});
+
+// desde el celu de quien canta (o su copiloto): el server ya verifico quien es
+socket.on('letra:sincronizar', ({ accion, delta } = {}) => {
+  if (espejo || etapaActual !== 'PLAYING') return;
+  if (accion === 'alinear') alinearConLaVoz();
+  else fijarOffset(offsetLetra + (Number(delta) || 0));
 });
 
 const elActual = $('#lineaActual');

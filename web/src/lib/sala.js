@@ -724,6 +724,21 @@ $('btnSalirCopiloto').addEventListener('click', () => enviar('copiloto:salir'));
 $('btnSalir').addEventListener('click', () => enviar('fila:salir'));
 $('btnCancelarTurno').addEventListener('click', () => enviar('fila:salir'));
 $('btnListo').addEventListener('click', () => enviar('turno:listo'));
+// Sincronizar la letra con la voz del video (la pantalla aplica el ajuste y lo guarda para esa cancion)
+document.addEventListener('click', (e) => {
+  const alinear = e.target.closest?.('[data-alinear]');
+  const ajuste = e.target.closest?.('[data-sync]');
+  if (!alinear && !ajuste) return;
+  const aviso = (txt) => {
+    for (const el of document.querySelectorAll('[data-sync-aviso]')) { el.textContent = txt; el.hidden = !txt; }
+    clearTimeout(aviso.t);
+    aviso.t = setTimeout(() => { for (const el of document.querySelectorAll('[data-sync-aviso]')) el.hidden = true; }, 3000);
+  };
+  const datos = alinear ? { accion: 'alinear' } : { accion: 'ajustar', delta: Number(ajuste.dataset.sync) };
+  enviar('letra:sincronizar', datos);
+  aviso(alinear ? 'Alineada con la voz ✓ (queda guardado para esta canción)' : 'Ajustado ✓');
+  navigator.vibrate?.(30);
+});
 $('btnTerminar').addEventListener('click', () => {
   if (confirm('¿Terminar la canción ahora?')) enviar('cantante:terminar');
 });

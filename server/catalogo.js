@@ -19,6 +19,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { puntuarKaraoke } from './karaoke.js';
 import { normalizar } from './texto.js';
+import { normalizarOffset } from './offsets.js';
 import { YouTubeError, esVideoId } from './youtube.js';
 
 export { normalizar };
@@ -44,14 +45,16 @@ export function crearCatalogo({
   fetchFn = (...a) => globalThis.fetch(...a),
   ejecutar, // (cmd, args, {timeout}) -> {stdout, stderr}   (se inyecta en tests)
   onEstadoAudio = () => {},
+  offsets, // offsets.js: desfase de la letra guardado por cancion (opcional)
   log = () => {},
   config = {},
 } = {}) {
   const C = {
     POR_PAGINA_LOCAL: 12,
-    TIMEOUT_LRCLIB_MS: 9_000,
-    ESPERA_LETRA_MS: 8_000, // cuanto se espera la letra antes de dar la cancion por lista
-    TOLERANCIA_LETRA_S: 25,
+    TIMEOUT_LRCLIB_MS: 6_000,
+    ESPERA_LETRA_MS: 12_000, // cuanto se espera la letra antes de dar la cancion por lista
+    TOLERANCIA_LETRA_S: 25, // diferencia de duracion en la que la letra se da por buena
+    TOLERANCIA_LETRA_AMPLIA_S: 90, // mas alla de esto no se usa; entre ambas se usa igual (la version karaoke suele tener intro/final extra)
     LRCLIB: process.env.LRCLIB_URL || LRCLIB_POR_DEFECTO,
     ...config,
   };
@@ -136,7 +139,7 @@ export function crearCatalogo({
         karaokeScore: karaoke.score,
         esKaraoke: karaoke.esKaraoke,
         lrc: null,
-        offsetLetra: 0,
+        offsetLetra: offsets?.get(id) ?? 0, // lo que ajusto alguien la ultima vez que se canto
       };
       canciones.push(meta);
       log(`[SONG] registrada ${id}: "${meta.titulo}" (${meta.canal}, ${meta.duracion}s, karaoke ${meta.karaokeScore})`);
@@ -160,29 +163,40 @@ export function crearCatalogo({
     }
   }
 
-  // Letra sincronizada para el video elegido (mejor esfuerzo). Se acepta solo si la duracion de la
-  // letra es parecida a la del video (si no, el tiempo no coincidiria y seria peor que no tener).
-  // Se prueba de lo mas preciso (artista + tema) a lo mas amplio; gana la de duracion mas cercana
-  // (y, a igualdad, la del mismo artista).
+  // Letra sincronizada para el video elegido (mejor esfuerzo). Se prueba de lo mas preciso
+  // (artista + tema) a lo mas amplio. El titulo del video es desordenado ("TEMA - ARTISTA | KARAOKE",
+  // "ARTISTA - TEMA (Karaoke Version)"), asi que se compara por PALABRAS sin importar el orden.
+  // Duracion: una version karaoke suele tener intro/final distintos al tema original, por eso se
+  // acepta hasta TOLERANCIA_LETRA_AMPLIA_S de diferencia (gana la mas cercana); la pantalla permite
+  // ajustar el desfase en vivo con [ y ].
+  const palabras = (t) => normalizar(t).split(' ').filter((w) => w.length > 1);
   async function buscarLetra(meta) {
     const { artista, tema } = separarArtistaTema(meta.titulo);
-    if (`${artista} ${tema}`.trim().length < 3) return null;
-    const consultas = [];
-    if (artista && tema) consultas.push(`/search?track_name=${encodeURIComponent(tema)}&artist_name=${encodeURIComponent(artista)}`);
-    consultas.push(`/search?q=${encodeURIComponent(`${artista} ${tema}`.trim())}`);
-    if (artista) consultas.push(`/search?q=${encodeURIComponent(tema)}`);
-    const nTema = normalizar(tema);
-    const nArtista = normalizar(artista).split(' ')[0] || '';
+    const consulta = `${artista} ${tema}`.trim();
+    if (consulta.length < 3) return null;
+    const rutas = [];
+    if (artista && tema) rutas.push(`/search?track_name=${encodeURIComponent(tema)}&artist_name=${encodeURIComponent(artista)}`);
+    rutas.push(`/search?q=${encodeURIComponent(consulta)}`);
+    if (artista) rutas.push(`/search?q=${encodeURIComponent(tema)}`);
+    const buscadas = palabras(consulta);
+    const nArtista = palabras(artista)[0] || '';
+    const puntuar = (r) => {
+      if (!r.syncedLyrics || r.instrumental) return null;
+      const nombre = new Set(palabras(`${r.artistName || ''} ${r.trackName || r.name || ''}`));
+      const halladas = buscadas.filter((w) => nombre.has(w)).length;
+      if (!buscadas.length || halladas / buscadas.length < 0.6) return null; // no es el mismo tema
+      const dif = Math.abs(Number(r.duration) - Number(meta.duracion));
+      if (!(dif <= C.TOLERANCIA_LETRA_AMPLIA_S)) return null;
+      const mismoArtista = !!nArtista && palabras(r.artistName).includes(nArtista);
+      return { r, dif, mismoArtista, orden: dif - (mismoArtista ? 5 : 0) + (dif > C.TOLERANCIA_LETRA_S ? 1000 : 0) };
+    };
     let mejor = null;
-    for (const ruta of consultas) {
+    for (const ruta of rutas) {
       let crudo;
       try { crudo = await lrclib(ruta); } catch (e) { log(`[letra] ${meta.id}: lrclib fallo (${e.message})`); continue; }
-      const candidatos = (Array.isArray(crudo) ? crudo : [])
-        .filter((r) => r.syncedLyrics && !r.instrumental && normalizar(r.trackName || r.name).includes(nTema.split(' ')[0] || nTema))
-        .map((r) => ({ r, dif: Math.abs(Number(r.duration) - Number(meta.duracion)), mismoArtista: !!nArtista && normalizar(r.artistName).includes(nArtista) }))
-        .filter((x) => x.dif <= C.TOLERANCIA_LETRA_S)
-        .sort((a, b) => a.dif - (a.mismoArtista ? 5 : 0) - (b.dif - (b.mismoArtista ? 5 : 0)));
-      if (candidatos.length) { mejor = candidatos[0]; break; }
+      const candidatos = (Array.isArray(crudo) ? crudo : []).map(puntuar).filter(Boolean).sort((x, y) => x.orden - y.orden);
+      if (candidatos.length && (!mejor || candidatos[0].orden < mejor.orden)) mejor = candidatos[0];
+      if (mejor && mejor.dif <= C.TOLERANCIA_LETRA_S) break; // ya hay una muy buena
     }
     if (!mejor) {
       meta.letraEstado = 'sin_letra';
@@ -194,7 +208,8 @@ export function crearCatalogo({
     meta.lrc = `/cache-audio/${meta.id}.lrc`;
     meta.letraEstado = 'ok';
     meta.letraDesfase = Math.round(meta.duracion - mejor.r.duration);
-    log(`[letra] ${meta.id}: letra sincronizada de lrclib (duracion ${mejor.r.duration}s vs video ${meta.duracion}s)`);
+    meta.letraAproximada = mejor.dif > C.TOLERANCIA_LETRA_S;
+    log(`[letra] ${meta.id}: letra de lrclib "${mejor.r.artistName} - ${mejor.r.trackName}" (duracion ${mejor.r.duration}s vs video ${meta.duracion}s${meta.letraAproximada ? ', aproximada' : ''})`);
     return meta.lrc;
   }
 
@@ -310,6 +325,15 @@ export function crearCatalogo({
     metaPublica,
     buscarLetra,
     sondear,
+    // Guarda el desfase de la letra de una cancion (lo ajusta quien canta en vivo)
+    fijarOffset(id, valor) {
+      const c = canciones.find((x) => x.id === id);
+      if (!c) return null;
+      const n = offsets ? offsets.set(id, valor) : normalizarOffset(valor);
+      if (n === null) return null;
+      c.offsetLetra = n;
+      return n;
+    },
     get remoto() {
       return !!youtube?.configurada;
     },

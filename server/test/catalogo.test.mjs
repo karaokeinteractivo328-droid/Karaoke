@@ -34,7 +34,7 @@ test('motivo del error: la causa real, no el comando que fallo', () => {
 });
 
 // ---------------------------------------------------------------- escenario de prueba
-async function armar({ configurada = true, busqueda, detalle, lrclib } = {}) {
+async function armar({ configurada = true, busqueda, detalle, lrclib, offsets } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'karaoke-cat-'));
   await mkdir(join(dir, 'cache'), { recursive: true });
   const eventos = [];
@@ -61,7 +61,7 @@ async function armar({ configurada = true, busqueda, detalle, lrclib } = {}) {
     llamadas.lrclib.push(String(url));
     return { ok: true, json: async () => lrclib ?? [] };
   };
-  const cat = crearCatalogo({ canciones, dirLocal: dir, dirCache: join(dir, 'cache'), youtube, fetchFn, ejecutar: async () => ({ stdout: '', stderr: '' }), onEstadoAudio: (id, e, m) => eventos.push([id, e, m]) });
+  const cat = crearCatalogo({ canciones, dirLocal: dir, dirCache: join(dir, 'cache'), youtube, offsets, fetchFn, ejecutar: async () => ({ stdout: '', stderr: '' }), onEstadoAudio: (id, e, m) => eventos.push([id, e, m]) });
   return { cat, canciones, llamadas, eventos, dir, limpiar: () => rm(dir, { recursive: true, force: true }) };
 }
 
@@ -231,6 +231,33 @@ test('letra: se acepta la de lrclib solo si dura parecido al video; se guarda co
   await x.limpiar();
 });
 
+test('letra: titulo en otro orden y version karaoke mas larga que el tema original igual encuentran la letra', async () => {
+  const x = await armar({
+    detalle: (id) => ({ videoId: id, titulo: 'MIÉNTEME - TINI, María Becerra | KARAOKE', canal: 'Karaoke Latino', thumbnail: null, duracion: 205 }),
+    lrclib: [
+      { id: 1, trackName: 'Otro tema cualquiera', artistName: 'Otro', duration: 205, syncedLyrics: LRC, instrumental: false },
+      { id: 2, trackName: 'Miénteme (Video Oficial)', artistName: 'TINI, Maria Becerra', duration: 183, syncedLyrics: LRC, instrumental: false },
+    ],
+  });
+  const m = await x.cat.resolver(`yt-${vid(9)}`);
+  const c = x.canciones.find((q) => q.id === m.id);
+  await x.cat.buscarLetra(c);
+  assert.equal(c.letraEstado, 'ok', 'se encontro aunque el video dura 22 s mas y el titulo esta al reves');
+  assert.equal(c.letraAproximada, false);
+  await x.limpiar();
+});
+
+test('letra: con mucha diferencia de duracion (hasta 90 s) se usa igual pero queda marcada como aproximada', async () => {
+  const x = await armar({ lrclib: [{ id: 2, trackName: 'Bohemian Rhapsody', artistName: 'Queen', duration: 300, syncedLyrics: LRC, instrumental: false }] });
+  const m = await x.cat.resolver(`yt-${vid(10)}`);
+  const c = x.canciones.find((q) => q.id === m.id);
+  await x.cat.buscarLetra(c);
+  assert.equal(c.letraEstado, 'ok');
+  assert.equal(c.letraAproximada, true);
+  assert.equal(c.lrc, `/cache-audio/${m.id}.lrc`);
+  await x.limpiar();
+});
+
 test('letra: si no hay una compatible no se inventa (el video karaoke ya trae la suya)', async () => {
   const x = await armar({ lrclib: [{ id: 1, trackName: 'Bohemian Rhapsody', artistName: 'Queen', duration: 500, syncedLyrics: LRC, instrumental: false }] });
   const m = await x.cat.resolver(`yt-${vid(7)}`);
@@ -249,6 +276,23 @@ test('letra: el audio de YouTube figura "lista" recien cuando la letra de lrclib
   assert.equal(x.cat.metaPublica(m.id).lrc, `/cache-audio/${m.id}.lrc`, 'la meta que baja la pantalla ya trae la letra');
   assert.equal(x.llamadas.lrclib.length >= 1, true);
   await x.limpiar();
+});
+
+test('desfase de la letra: se fija por cancion, se recuerda y la proxima vez la cancion ya viene ajustada', async () => {
+  const guardados = new Map();
+  const offsets = { get: (id) => (guardados.has(id) ? guardados.get(id) : null), set: (id, v) => { guardados.set(id, Math.round(Number(v) * 10) / 10); return guardados.get(id); } };
+  const x = await armar({ offsets });
+  const m = await x.cat.resolver(`yt-${vid(11)}`);
+  assert.equal(x.cat.metaPublica(m.id).offsetLetra, 0, 'la primera vez no hay ajuste');
+  assert.equal(x.cat.fijarOffset(m.id, 12.04), 12);
+  assert.equal(x.cat.metaPublica(m.id).offsetLetra, 12, 'la pantalla que baje la meta lo recibe');
+  assert.equal(guardados.get(m.id), 12);
+  assert.equal(x.cat.fijarOffset('yt-noexiste', 3), null, 'de una cancion desconocida no se guarda nada');
+  // "reinicio": un catalogo nuevo con los mismos offsets registra la cancion ya ajustada
+  const y = await armar({ offsets });
+  const m2 = await y.cat.resolver(`yt-${vid(11)}`);
+  assert.equal(y.cat.metaPublica(m2.id).offsetLetra, 12);
+  await x.limpiar(); await y.limpiar();
 });
 
 test('meta publica: trae lo que la pantalla necesita (videoId, thumbnail, consulta, puntaje, estado del audio)', async () => {

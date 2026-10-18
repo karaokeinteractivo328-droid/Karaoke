@@ -155,6 +155,16 @@ import Base from '../layouts/Base.astro';
         <p class="letraActual" id="cantaLetra">…</p>
         <p class="letraSig" id="cantaLetraSig"></p>
       </div>
+      <div class="tarjeta syncBox">
+        <p class="kicker">⏱ letra a tiempo</p>
+        <p class="chico">Si la letra no va con la voz del video (a veces tiene intro):</p>
+        <button class="boton chicoBtn" data-alinear>🎯 ¡Ahora empieza la primera línea!</button>
+        <div class="syncFila">
+          <button class="boton chicoBtn" data-sync="-0.5">⏪ Va atrasada</button>
+          <button class="boton chicoBtn" data-sync="0.5">Va adelantada ⏩</button>
+        </div>
+        <p class="chico syncAviso" data-sync-aviso hidden></p>
+      </div>
       <button id="btnTerminar" class="link">Terminar canción</button>
     </section>
 
@@ -194,6 +204,16 @@ import Base from '../layouts/Base.astro';
         <p class="vozTurno" data-voz-turno hidden></p>
         <p class="letraActual" id="copiLetra">Esperando que arranque la canción…</p>
         <p class="letraSig" id="copiLetraSig"></p>
+      </div>
+      <div class="tarjeta syncBox">
+        <p class="kicker">⏱ letra a tiempo</p>
+        <p class="chico">Si la letra no va con la voz del video (a veces tiene intro):</p>
+        <button class="boton chicoBtn" data-alinear>🎯 ¡Ahora empieza la primera línea!</button>
+        <div class="syncFila">
+          <button class="boton chicoBtn" data-sync="-0.5">⏪ Va atrasada</button>
+          <button class="boton chicoBtn" data-sync="0.5">Va adelantada ⏩</button>
+        </div>
+        <p class="chico syncAviso" data-sync-aviso hidden></p>
       </div>
       <div class="reacciones chicas" data-reacciones></div>
       <button id="btnSalirCopiloto" class="link">Dejar de ser copiloto</button>
@@ -249,6 +269,9 @@ import Base from '../layouts/Base.astro';
     }
     .boton.chicoBtn { font-size: 1rem; padding: 0.7rem 1rem; margin-top: 0.6rem; }
     .boton:disabled { opacity: 0.55; }
+    .syncFila { display: flex; gap: 0.5rem; }
+    .syncFila .boton { flex: 1; }
+    .syncBox .chico { margin: 0.2rem 0; }
     .boton:active { transform: translateY(2px); }
     .link { background: none; border: 0; color: var(--tinta); opacity: 0.65; text-decoration: underline; font-family: var(--body); font-size: 0.95rem; cursor: pointer; padding: 0.5rem; }
     .error { color: var(--rosa-hot); font-weight: 700; font-family: var(--body); font-size: 0.9rem; }

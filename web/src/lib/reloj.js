@@ -17,6 +17,13 @@
 //                 + un pequeno anticipo (la letra se lee un instante antes de cantarla).
 
 export const ANTICIPO_LETRA = 0.1; // s
+export const REACCION_S = 0.25; // lo que tarda alguien en tocar "ahora" despues de oir la voz
+
+// Desfase de letra para que la primera linea caiga justo ahora (la voz acaba de empezar):
+// `letraAhora` es reloj.letra(0) en el instante del toque. Positivo = la letra se atrasa.
+export function desfaseParaAlinear(letraAhora, tiempoPrimeraLinea, reaccion = REACCION_S) {
+  return Math.round((letraAhora - tiempoPrimeraLinea - reaccion) * 10) / 10;
+}
 
 export function crearReloj({ audio, ahora = () => performance.now(), latencia = () => 0, esperaMaxMs = 6000 } = {}) {
   let modo = 'espera';

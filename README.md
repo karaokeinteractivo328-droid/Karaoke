@@ -60,8 +60,8 @@ npm run dev
 ### Tests
 
 ```bash
-npm -w server test                  # 100 casos con reloj falso: fila, audio, catálogo, retos, palabra
-npm -w web test                     # 89 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
+npm -w server test                  # 108 casos con reloj falso: fila, audio, catálogo, retos, palabra
+npm -w web test                     # 91 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
 npm -w server run test:integracion  # sockets REALES (3 suites, ver abajo)
 ```
 
@@ -132,6 +132,16 @@ remix / full album **salvo que el título ya diga karaoke**. También cuentan la
 contra lo que escribiste y que la duración sea plausible. No es estricto: solo se excluye lo
 claramente inservible y **nunca se devuelve una lista vacía si YouTube devolvió algo** (se
 muestran los mejores candidatos, los karaoke primero).
+
+**Letra a tiempo con el audio.** La letra de LRCLIB viene con los tiempos del tema original y muchos
+videos de karaoke tienen una intro distinta, así que puede salir corrida. El audio de YouTube no se
+puede "escuchar" para alinearla sola, por eso se ajusta en vivo y **el desfase queda guardado por
+canción** (en el server, `offsets.json`, y en la pantalla): la próxima vez ya sale a tiempo.
+- En el celu de quien canta (o del copiloto): **🎯 ¡Ahora empieza la primera línea!** (tocalo cuando
+  arranca la voz: la letra se alinea sola) y **⏪ Va atrasada / Va adelantada ⏩** (±0,5 s).
+- En la pantalla: `Enter` = alinear, `[` / `]` = ±0,2 s.
+- Para elegir la letra correcta: se prueba artista+tema y variantes, se comparan palabras sin importar el
+  orden del título y se acepta hasta 90 s de diferencia de duración (gana la más cercana).
 
 **Qué se guarda al elegir**: `videoId`, título, canal, miniatura, duración, `searchQuery`
 (con qué se lo encontró) y `karaokeScore` (+ `origen`, `esKaraoke`).

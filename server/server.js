@@ -15,6 +15,7 @@ import express from 'express';
 import cors from 'cors';
 import { crearCatalogo } from './catalogo.js';
 import { crearYouTube } from './youtube.js';
+import { crearOffsets } from './offsets.js';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { readFile, mkdir, writeFile, rm, rename, stat, readdir } from 'node:fs/promises';
@@ -126,7 +127,10 @@ const escenario = crearEscenario({
 const DIR_CACHE = process.env.CACHE_AUDIO_DIR || join(__dirname, 'cache-audio'); // solo letras .lrc
 await mkdir(DIR_CACHE, { recursive: true }).catch(() => {});
 const youtube = crearYouTube({ log: (m) => console.log(m) });
+// desfase de la letra por cancion (lo ajusta quien canta; vale para las veces siguientes)
+const offsets = crearOffsets({ archivo: join(DIR_CACHE, 'offsets.json'), log: (m) => console.log(m) });
 const catalogo = crearCatalogo({
+  offsets,
   canciones,
   dirLocal: __dirname,
   dirCache: DIR_CACHE,
@@ -552,6 +556,16 @@ io.on('connection', (socket) => {
       return r;
     })
   );
+  // Sincronizar la letra en vivo: el celu de quien canta (o su copiloto) manda "alinear" (la voz
+  // empieza AHORA la primera linea) o "ajustar" (+/- segundos); la pantalla lo aplica y lo guarda.
+  socket.on('letra:sincronizar', ({ accion, delta } = {}, cb) =>
+    intent(cb, (t) => {
+      if (!escenario.puedeSincronizarLetra(t)) return { ok: false, error: 'Solo quien canta puede ajustar la letra' };
+      const d = Math.max(-5, Math.min(5, Number(delta) || 0));
+      io.emit('letra:sincronizar', accion === 'alinear' ? { accion: 'alinear' } : { accion: 'ajustar', delta: d });
+      return { ok: true };
+    })
+  );
   socket.on('turno:listo', (_d, cb) => intent(cb, (t) => escenario.listo(t)));
   socket.on('cantante:terminar', (_d, cb) => intent(cb, (t) => escenario.terminar(t)));
   socket.on('reto:responder', (d = {}, cb) => intent(cb, (t) => escenario.responderReto(t, d)));
@@ -584,6 +598,10 @@ io.on('connection', (socket) => {
   // la pantalla es la que suena: ella dice si el audio realmente cargo / se puede reproducir
   socket.on('pantalla:audio', soloPantalla((d = {}) => escenario.pantallaAudio(d)));
   socket.on('pantalla:audioFallo', soloPantalla((d = {}) => escenario.pantallaAudioFallo(d)));
+  socket.on('pantalla:offset', soloPantalla(({ cancionId, offset } = {}) => {
+    const n = catalogo.fijarOffset(String(cancionId || ''), offset);
+    if (n !== null) console.log(`[letra] desfase de ${cancionId} guardado: ${n} s`);
+  }));
   socket.on('pantalla:reiniciar', soloPantalla(() => escenario.reinicioSeguro()));
   // la linea de letra actual, para el teleprompter del copiloto
   socket.on('pantalla:letra', soloPantalla(({ actual, siguiente, voz } = {}) => {

@@ -728,6 +728,14 @@ export function crearEscenario({
     return resolverReto(id, opcion, esCantante ? 'cantante' : 'copiloto');
   }
 
+  // Quien puede mover la letra en vivo: el que canta o su copiloto, y solo mientras suena
+  function puedeSincronizarLetra(token) {
+    if (etapa !== ETAPAS.PLAYING || !actual) return false;
+    if (actual.token === token) return true;
+    const cantante = participantes.get(actual.token);
+    return !!cantante && cantante.copiloto === token;
+  }
+
   function pantallaRetoResponder({ id, opcion } = {}) {
     return resolverReto(id, opcion, 'mano');
   }
@@ -1053,6 +1061,7 @@ export function crearEscenario({
     pantallaRetoResponder,
     pantallaRetoFin,
     responderReto,
+    puedeSincronizarLetra,
     audioServidorEstado,
     pantallaAudio,
     pantallaAudioFallo,

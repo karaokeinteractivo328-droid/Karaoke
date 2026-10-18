@@ -1,7 +1,7 @@
 // Sincronizacion: el audio manda. Reloj + letra palabra por palabra.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { crearReloj, ANTICIPO_LETRA } from '../src/lib/reloj.js';
+import { desfaseParaAlinear, crearReloj, ANTICIPO_LETRA } from '../src/lib/reloj.js';
 import { parsearLRC, indiceActual, tiemposPalabras } from '../src/lib/lrc.js';
 
 function mundo({ esperaMaxMs, latencia } = {}) {
@@ -144,4 +144,17 @@ test('simulacion: la letra sigue al audio durante toda la cancion en distintos o
     }
     assert.equal(ultimo, 3);
   }
+});
+
+test('alinear con la voz: la primera linea (17 s en la letra) cae cuando la voz empieza en el segundo 29 del video', () => {
+  // el video tiene 12 s de intro: a los 29,25 s del video (reloj.letra(0)) alguien toca "ahora"
+  const off = desfaseParaAlinear(29.25, 17);
+  assert.equal(off, 12); // 29,25 - 17 - 0,25 de reaccion
+  // con ese desfase, la letra en el instante real de la voz (29 s) vale exactamente 17 s
+  assert.equal(29 - off, 17);
+});
+
+test('alinear: si la letra va atrasada (voz antes de lo previsto) el desfase queda negativo', () => {
+  assert.ok(desfaseParaAlinear(10.25, 17) < 0);
+  assert.equal(desfaseParaAlinear(17.25, 17), 0, 'ya estaba a tiempo: no cambia nada');
 });

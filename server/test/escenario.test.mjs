@@ -281,6 +281,23 @@ test('copiloto: un solo lugar por cantante, sin permisos de control', () => {
   assert.equal(m.e.yo(x).copilotoDe, null, 'al terminar se libera');
 });
 
+test('sincronizar la letra en vivo: solo el que canta o su copiloto, y solo mientras suena', () => {
+  const m = mundo();
+  const a = m.persona(1, 'A');
+  const x = m.persona(2, 'X'); // copiloto
+  const otro = m.persona(3, 'Otro');
+  m.e.entrarFila(a);
+  m.e.unirseCopiloto(x, m.e.yo(a).codigoCopiloto);
+  assert.equal(m.e.puedeSincronizarLetra(a), false, 'todavia no esta cantando');
+  aEscenario(m, a);
+  assert.equal(m.e.puedeSincronizarLetra(a), true, 'el cantante');
+  assert.equal(m.e.puedeSincronizarLetra(x), true, 'su copiloto');
+  assert.equal(m.e.puedeSincronizarLetra(otro), false, 'el publico no toca la letra');
+  assert.equal(m.e.puedeSincronizarLetra('desconocido'.padEnd(20, 'x')), false);
+  m.e.pantallaFin({ progreso: 1 });
+  assert.equal(m.e.puedeSincronizarLetra(a), false, 'despues de cantar ya no');
+});
+
 test('server reiniciado: el celu se re-anota solo con su cancion guardada', () => {
   const m = mundo();
   const token = tk(7);
