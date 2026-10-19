@@ -9,7 +9,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test test/escenario.test.mjs test/retos.test.mjs test/catalogo.test.mjs test/karaoke.test.mjs test/youtube.test.mjs test/offsets.test.mjs test/seleccion.test.mjs",
-    "test:integracion": "node test/integracion.mjs && node test/integracion2.mjs && node test/integracion3.mjs"
+    "test:integracion": "node test/integracion.mjs && node test/integracion2.mjs && node test/integracion3.mjs && node test/integracion4.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

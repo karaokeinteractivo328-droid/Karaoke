@@ -676,7 +676,7 @@ export function crearEscenario({
   // la compara y avisa el resultado a todos.
   const normalizar = (w) => String(w || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9ñ]/g, '');
 
-  function pantallaRetoPalabra({ id, opciones, correcta, dur } = {}) {
+  function pantallaRetoPalabra({ id, opciones, correcta, dur, puntos } = {}) {
     if (!actual || etapa !== ETAPAS.PLAYING) return { ok: false, error: 'No se está cantando' };
     if (actual.retoPalabra && !actual.retoPalabra.resuelto) return { ok: false, error: 'Ya hay un reto activo' };
     if (!Array.isArray(opciones) || opciones.length < 2 || opciones.length > 4) return { ok: false, error: 'Opciones inválidas' };
@@ -691,6 +691,8 @@ export function crearEscenario({
       correcta: i,
       hasta: ahora() + ms,
       resuelto: null,
+      // con mas retos por cancion cada uno vale menos (el total sigue topeado en RETOS_MAX)
+      puntos: Math.min(C.RETO_PUNTOS, Math.max(1, Math.round(Number(puntos) || C.RETO_PUNTOS))),
     };
     marcar();
     emitirSiCambio();
@@ -712,8 +714,8 @@ export function crearEscenario({
   function cerrarReto(r, { opcion = null, acierto = false, timeout = false, quien = null }) {
     r.resuelto = { opcion, acierto, timeout, quien };
     log(`[escenario] reto palabra: ${timeout ? 'sin respuesta' : acierto ? 'acertó' : 'falló'} (${quien || 'tiempo'})`);
-    if (acierto) sumarReto(`p:${r.id}`, 'palabra', C.RETO_PUNTOS);
-    onRetoResultado && onRetoResultado({ id: r.id, acierto, timeout, opcion, correcta: r.correcta, palabra: r.opciones[r.correcta], quien, puntos: acierto ? C.RETO_PUNTOS : 0 });
+    if (acierto) sumarReto(`p:${r.id}`, 'palabra', r.puntos);
+    onRetoResultado && onRetoResultado({ id: r.id, acierto, timeout, opcion, correcta: r.correcta, palabra: r.opciones[r.correcta], quien, puntos: acierto ? r.puntos : 0 });
     marcar();
     emitirSiCambio();
     return { ok: true, acierto, palabra: r.opciones[r.correcta] };

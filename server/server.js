@@ -21,7 +21,7 @@ import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { readFile, mkdir, writeFile, rm, rename, stat, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import os from 'node:os';
@@ -245,11 +245,12 @@ for (const f of await readdir(GRAB).catch(() => [])) {
   if (f.endsWith('.tmp.mp4')) await rm(join(GRAB, f), { force: true }).catch(() => {});
 }
 
+// (se llama mas abajo, cuando ya existen aMp4 y la cola)
 // Privacidad + disco: los videos viejos se borran solos (una instalacion
 // fisica que corre horas no puede llenarse de grabaciones).
 setInterval(async () => {
   const limite = Date.now() - RETENCION_VIDEO_MS;
-  for (const [t, creado] of videoTokens) if (creado < limite) { videoTokens.delete(t); videoErrores.delete(t); videoPedidos.delete(t); videoDisponibles.delete(t); }
+  for (const [t, creado] of videoTokens) if (creado < limite) { videoTokens.delete(t); videoErrores.delete(t); videoPedidos.delete(t); videoDisponibles.delete(t); duracionVideo.delete(t); }
   for (const f of await readdir(GRAB).catch(() => [])) {
     try {
       const st = await stat(join(GRAB, f));
@@ -258,61 +259,137 @@ setInterval(async () => {
   }
 }, 10 * 60 * 1000).unref();
 
-// Convierte a un archivo TEMPORAL y recien al final lo renombra al .mp4
-// definitivo. Asi, si ffmpeg se cuelga, lo matamos, o el server se reinicia
-// a mitad de camino, JAMAS queda un .mp4 a medio escribir sirviendose como
-// si estuviera listo (eso es lo que rompia la descarga).
+// ---------------------------------------------------------------- conversion de video
+// La pantalla graba directo en MP4 (Chrome >= 126: H.264 + AAC), asi que el server casi no tiene que
+// hacer nada: solo "empaqueta" (`-c copy`, +faststart), que tarda milisegundos aun en una CPU diminuta.
+// Antes el video se grababa en webm y se RECODIFICABA aca: en un servidor gratuito (CPU compartida) eso
+// podia tardar mas que la propia cancion y el celu se quedaba en "procesando". Si el navegador solo sabe
+// grabar webm se sigue recodificando, pero mas liviano, de a UNA conversion por vez, con progreso y con
+// un tope de tiempo. Todo lo que quedo a medias antes de un reinicio se retoma solo al arrancar.
+//   <token>.rec.mp4  grabacion cruda de Chrome   <token>.webm  grabacion cruda (navegador viejo)
+//   <token>.tmp.mp4  conversion en curso          <token>.mp4   LISTO (lo unico que se sirve como "listo")
+const TOPE_CONVERSION_MS = 12 * 60 * 1000;
+const MAX_CONVERSIONES = 1;
+const colaConversion = [];
+let convirtiendo = 0;
+const progresoVideo = new Map(); // token -> 0..1
+const duracionVideo = new Map(); // token -> segundos de grabacion (los avisa la pantalla; para el %)
+const crudoDe = (token) => (existsSync(join(GRAB, `${token}.rec.mp4`)) ? { tipo: 'mp4', archivo: `${token}.rec.mp4` } : existsSync(join(GRAB, `${token}.webm`)) ? { tipo: 'webm', archivo: `${token}.webm` } : null);
+
 function aMp4(sesion) {
-  const webm = join(GRAB, `${sesion}.webm`);
+  const crudo = crudoDe(sesion);
+  if (!crudo || enProceso.has(sesion) || existsSync(join(GRAB, `${sesion}.mp4`))) return;
+  enProceso.add(sesion);
+  progresoVideo.set(sesion, 0);
+  colaConversion.push({ sesion, crudo });
+  siguienteConversion();
+}
+
+function siguienteConversion() {
+  while (convirtiendo < MAX_CONVERSIONES && colaConversion.length) {
+    const { sesion, crudo } = colaConversion.shift();
+    convirtiendo++;
+    convertir(sesion, crudo)
+      .catch((e) => {
+        videoErrores.set(sesion, 'conversion');
+        console.warn(`[video] conversion fallo (${sesion}): ${String(e.message || e).split('\n')[0]}`);
+      })
+      .finally(() => {
+        convirtiendo--;
+        enProceso.delete(sesion);
+        progresoVideo.delete(sesion);
+        siguienteConversion();
+      });
+  }
+}
+
+// ffmpeg con progreso (`-progress pipe:1`) y tope de tiempo. Devuelve cuando termina bien.
+function correrFfmpeg(args, sesion) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath || 'ffmpeg', ['-nostats', '-progress', 'pipe:1', ...args], { windowsHide: true });
+    let cola = '';
+    let resto = '';
+    const tope = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error(`ffmpeg tardo mas de ${TOPE_CONVERSION_MS / 60000} min`)); }, TOPE_CONVERSION_MS);
+    proc.stdout.on('data', (d) => {
+      resto += d;
+      const lineas = resto.split('\n');
+      resto = lineas.pop();
+      for (const l of lineas) {
+        const m = /^out_time_(?:us|ms)=(\d+)/.exec(l);
+        const total = duracionVideo.get(sesion);
+        if (m && total > 0) progresoVideo.set(sesion, Math.min(0.99, Number(m[1]) / 1e6 / total));
+      }
+    });
+    proc.stderr.on('data', (d) => { cola = (cola + d).slice(-4000); });
+    proc.on('error', (e) => { clearTimeout(tope); reject(e); });
+    proc.on('close', (code) => {
+      clearTimeout(tope);
+      if (code === 0) resolve();
+      else reject(new Error(cola.split('\n').filter(Boolean).slice(-3).join(' | ') || `ffmpeg salio con ${code}`));
+    });
+  });
+}
+
+async function convertir(sesion, { tipo, archivo }) {
+  const entrada = join(GRAB, archivo);
   const tmp = join(GRAB, `${sesion}.tmp.mp4`);
   const mp4 = join(GRAB, `${sesion}.mp4`);
-  enProceso.add(sesion);
-  const args = [
-    '-y',
-    '-fflags', '+genpts+igndts', // el webm de MediaRecorder no trae timestamps prolijos
-    '-i', webm,
-    // 'ultrafast': en Render free la CPU es compartida/lenta y un evento en vivo
-    // no puede esperar 3 minutos por cada video; se pierde algo de compresion
-    // (archivos un poco mas grandes) a cambio de convertir bastante mas rapido.
-    // MediaRecorder entrega cuadros a ritmo variable: se fija a 30 fps constantes y
-    // rango de color estandar (tv), que es lo que esperan todos los reproductores (iOS incluido)
-    '-vf', 'scale=out_range=tv,format=yuv420p', '-r', '30',
-    '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac', '-b:a', '160k', '-ar', '44100',
-    '-max_muxing_queue_size', '4096',
-    '-movflags', '+faststart',
-    tmp,
-  ];
-  const proc = execFile(
-    ffmpegPath || 'ffmpeg',
-    args,
-    { maxBuffer: 1 << 26, timeout: 15 * 60 * 1000 },
-    async (err, _stdout, stderr) => {
-      enProceso.delete(sesion);
-      if (err) {
-        videoErrores.set(sesion, 'conversion');
-        console.warn(`[video] ffmpeg fallo (${sesion}):`, err.message.split('\n')[0]);
-        console.warn((stderr || '').split('\n').slice(-15).join('\n'));
-        await rm(tmp, { force: true }).catch(() => {});
-        return;
-      }
-      // sanity check: que el resultado exista, pese algo, y sea decodificable
-      try {
-        const st = await stat(tmp);
-        if (st.size < 10_000) throw new Error(`mp4 sospechosamente chico (${st.size}B)`);
-        await validarMp4(tmp);
-      } catch (e) {
-        videoErrores.set(sesion, 'conversion');
-        console.warn(`[video] mp4 invalido para ${sesion}:`, e.message);
-        await rm(tmp, { force: true }).catch(() => {});
-        return;
-      }
-      await rename(tmp, mp4);
-      console.log(`[video] ${sesion}.mp4 listo`);
-      await rm(webm, { force: true }).catch(() => {});
+  const t0 = Date.now();
+  const validar = async () => {
+    const st = await stat(tmp);
+    if (st.size < 10_000) throw new Error(`mp4 sospechosamente chico (${st.size}B)`);
+    await validarMp4(tmp);
+  };
+  let hecho = false;
+  if (tipo === 'mp4') {
+    // 1) empaquetar sin recodificar (instantaneo)
+    try {
+      await correrFfmpeg(['-y', '-i', entrada, '-c', 'copy', '-movflags', '+faststart', tmp], sesion);
+      await validar();
+      hecho = true;
+      console.log(`[video] ${sesion}: mp4 empaquetado en ${Date.now() - t0} ms (sin recodificar)`);
+    } catch (e) {
+      console.warn(`[video] ${sesion}: no se pudo empaquetar (${String(e.message).split('\n')[0]}); se recodifica`);
+      await rm(tmp, { force: true }).catch(() => {});
     }
-  );
-  return proc;
+  }
+  if (!hecho) {
+    // 2) recodificar liviano: 540p, ultrafast, a 30 fps constantes y rango de color estandar (iOS incluido)
+    await correrFfmpeg([
+      '-y',
+      '-fflags', '+genpts+igndts', // lo que sale de MediaRecorder no trae timestamps prolijos
+      '-i', entrada,
+      '-vf', 'scale=-2:540:out_range=tv,format=yuv420p', '-r', '30',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
+      '-max_muxing_queue_size', '4096',
+      '-movflags', '+faststart',
+      tmp,
+    ], sesion);
+    try {
+      await validar();
+    } catch (e) {
+      await rm(tmp, { force: true }).catch(() => {});
+      throw e;
+    }
+    console.log(`[video] ${sesion}: mp4 recodificado en ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+  }
+  await rename(tmp, mp4);
+  await rm(entrada, { force: true }).catch(() => {});
+  console.log(`[video] ${sesion}.mp4 listo`);
+}
+
+// Lo que quedo a medias antes de un reinicio (o de un corte) se retoma solo
+async function retomarConversiones() {
+  for (const f of await readdir(GRAB).catch(() => [])) {
+    const m = /^([0-9a-f]{32})\.(rec\.mp4|webm)$/.exec(f);
+    if (!m || existsSync(join(GRAB, `${m[1]}.mp4`))) continue;
+    // las que ya vencieron (mas de 6 h) no tienen a quien entregarse: se borran en vez de convertirse
+    const viejo = await stat(join(GRAB, f)).then((st) => Date.now() - st.mtimeMs > RETENCION_VIDEO_MS, () => true);
+    if (viejo) { await rm(join(GRAB, f), { force: true }).catch(() => {}); continue; }
+    console.log(`[video] retomando la conversion de ${m[1]} (quedo a medias)`);
+    aMp4(m[1]);
+  }
 }
 
 // Re-decodifica el archivo (sin generar salida) para confirmar que el mp4
@@ -328,20 +405,25 @@ function validarMp4(path) {
   });
 }
 
+await retomarConversiones();
+
 // Solo se acepta la subida del token de una performance real (lo emite el
 // escenario al empezar el countdown), una sola vez, con tope de tamaño.
 app.post(
   '/api/video/:token',
-  express.raw({ type: ['video/webm', 'application/octet-stream'], limit: '150mb' }),
+  express.raw({ type: ['video/webm', 'video/mp4', 'application/octet-stream'], limit: '200mb' }),
   async (req, res) => {
     const token = req.params.token;
     if (!idOk(token) || !videoTokens.has(token)) return res.sendStatus(403);
     if (!req.body?.length) return res.sendStatus(400);
-    if (enProceso.has(token) || existsSync(join(GRAB, `${token}.webm`)) || existsSync(join(GRAB, `${token}.mp4`))) {
+    if (enProceso.has(token) || crudoDe(token) || existsSync(join(GRAB, `${token}.mp4`))) {
       return res.sendStatus(409);
     }
-    await writeFile(join(GRAB, `${token}.webm`), req.body);
-    console.log(`[video] recibido ${token}.webm (${(req.body.length / 1e6).toFixed(1)} MB) -> convirtiendo`);
+    const esMp4 = /mp4/i.test(String(req.headers['content-type'] || ''));
+    const dur = Number(req.headers['x-duracion']);
+    if (dur > 0 && dur < 3 * 3600) duracionVideo.set(token, dur);
+    await writeFile(join(GRAB, esMp4 ? `${token}.rec.mp4` : `${token}.webm`), req.body);
+    console.log(`[video] recibido ${token}.${esMp4 ? 'rec.mp4' : 'webm'} (${(req.body.length / 1e6).toFixed(1)} MB${dur ? `, ${Math.round(dur)} s` : ''}) -> ${esMp4 ? 'empaquetando' : 'recodificando'}`);
     res.json({ ok: true });
     aMp4(token);
   }
@@ -355,11 +437,18 @@ app.post(
 //   error        la subida o la conversion fallaron (si hay webm, igual se puede ver)
 function estadoVideo(token) {
   const mp4 = existsSync(join(GRAB, `${token}.mp4`));
-  const webm = existsSync(join(GRAB, `${token}.webm`));
+  const crudo = crudoDe(token);
+  const webm = crudo?.tipo === 'webm';
   if (mp4) return { estado: 'listo', mp4: true, webm: false };
-  if (enProceso.has(token)) return { estado: 'procesando', mp4: false, webm };
-  if (videoErrores.has(token)) return { estado: 'error', mp4: false, webm, motivo: videoErrores.get(token) };
-  if (webm) return { estado: 'procesando', mp4: false, webm };
+  // `crudo`: la grabacion sin procesar; el celu la puede abrir ya mismo mientras termina la conversion
+  const base = { mp4: false, webm, crudo: crudo ? `/video/${token}.${crudo.tipo === 'mp4' ? 'rec.mp4' : 'webm'}` : null, progreso: progresoVideo.get(token) ?? null };
+  if (enProceso.has(token)) return { estado: 'procesando', ...base };
+  if (videoErrores.has(token)) return { estado: 'error', ...base, motivo: videoErrores.get(token) };
+  // el archivo llego pero NO se esta convirtiendo (el server se reinicio a mitad de camino): se retoma ya
+  if (crudo) {
+    aMp4(token);
+    return { estado: 'procesando', ...base };
+  }
   const creado = videoTokens.get(token);
   if (creado == null) return { estado: 'desconocido', mp4: false, webm: false };
   const pedido = videoPedidos.get(token);
@@ -404,13 +493,13 @@ app.get('/api/video/:token/estado', (req, res) => {
   const t = req.params.token;
   if (!idOk(t)) return res.status(404).json({ estado: 'desconocido' });
   const e = estadoVideo(t);
-  res.json({ estado: e.estado, url: e.estado === 'listo' ? `/video/${t}` : null, motivo: e.motivo || null });
+  res.json({ estado: e.estado, url: e.estado === 'listo' ? `/video/${t}` : null, motivo: e.motivo || null, progreso: e.progreso ?? null, crudo: e.crudo || null });
 });
 
 // `/video/<token>.mp4` / `.webm` = archivo ; `/video/<token>` = pagina.
 app.get('/video/:archivo', (req, res) => {
   const a = req.params.archivo;
-  for (const ext of ['.mp4', '.webm']) {
+  for (const ext of ['.rec.mp4', '.mp4', '.webm']) {
     if (a.endsWith(ext)) {
       const s = a.slice(0, -ext.length);
       const f = join(GRAB, `${s}${ext}`);
@@ -435,12 +524,13 @@ p{opacity:.75}.spin{font-size:2rem;animation:g 1.2s linear infinite;display:inli
 <video src="/video/${a}.mp4" controls playsinline></video><br>
 <a class="btn" href="/video/${a}.mp4" download="karaoke-${a}.mp4">↓ Descargar (mp4)</a>`));
   }
-  if (e.estado === 'error' && e.webm) {
-    // la conversion fallo pero el archivo original sirve: se ofrece tal cual
+  if (e.estado === 'error' && e.crudo) {
+    // la conversion fallo pero la grabacion original sirve: se ofrece tal cual
+    const ext = e.crudo.endsWith('.webm') ? 'webm' : 'mp4';
     return res.type('html').send(pagina(`<h1>🎥 Tu video</h1>
-<video src="/video/${a}.webm" controls playsinline></video><br>
-<a class="btn" href="/video/${a}.webm" download="karaoke-${a}.webm">↓ Descargar</a>
-<p>No pudimos pasarlo a mp4, pero se ve igual (formato webm).</p>`));
+<video src="${e.crudo}" controls playsinline></video><br>
+<a class="btn" href="${e.crudo}" download="karaoke-${a}.${ext}">↓ Descargar</a>
+<p>No pudimos terminar de prepararlo, pero se ve igual (${ext === 'webm' ? 'formato webm' : 'mp4 sin optimizar'}).</p>`));
   }
   if (e.estado === 'error') {
     return res.type('html').send(pagina('<h1>No pudimos generar tu video</h1><p>La pantalla no llegó a enviarlo. Probá cantar de nuevo, ¡y gracias por participar!</p>'));
@@ -454,7 +544,9 @@ p{opacity:.75}.spin{font-size:2rem;animation:g 1.2s linear infinite;display:inli
 <script>document.getElementById('gen').onclick=async(ev)=>{ev.preventDefault();ev.target.textContent='Pidiéndolo…';await fetch('/api/video/${a}/generar',{method:'POST'}).catch(()=>{});location.reload()}</script>`));
   }
   if (e.estado === 'procesando' || e.estado === 'solicitado') {
-    return res.type('html').send(pagina(`<h1><span class="spin">⏳</span> Procesando tu video…</h1><p>Puede tardar un minuto. Esta página se actualiza sola.</p>${recarga(5000)}`));
+    const pct = e.progreso != null ? ` ${Math.round(e.progreso * 100)} %` : '';
+    const ya = e.crudo ? `<p>Si no querés esperar, ya podés verlo:</p><a class="btn" href="${e.crudo}">▶ Ver ahora</a>` : '';
+    return res.type('html').send(pagina(`<h1><span class="spin">⏳</span> Procesando tu video…${pct}</h1><p>Esta página se actualiza sola.</p>${ya}${recarga(4000)}`));
   }
   res.type('html').send(pagina(`<h1><span class="spin">⏳</span> Preparando tu video…</h1><p>La pantalla lo está enviando. Esta página se actualiza sola.</p>${recarga(4000)}`));
 });

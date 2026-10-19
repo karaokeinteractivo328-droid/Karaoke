@@ -60,8 +60,8 @@ npm run dev
 ### Tests
 
 ```bash
-npm -w server test                  # 122 casos con reloj falso: fila, audio, catálogo, retos, palabra
-npm -w web test                     # 91 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
+npm -w server test                  # 123 casos con reloj falso: fila, audio, catálogo, retos, palabra
+npm -w web test                     # 93 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
 npm -w server run test:integracion  # sockets REALES (3 suites, ver abajo)
 ```
 
@@ -117,13 +117,12 @@ en vivo, remix, karaoke e instrumental). Buscar **no gasta cuota de YouTube**. L
 
 **Al elegir, se busca el video que calza con esa letra** ([server/seleccion.js](server/seleccion.js)) con la
 **YouTube Data API v3** (`YOUTUBE_API_KEY`) y se reproduce con el **reproductor embebido** (IFrame API) en la
-pantalla. **No se descarga ni se extrae audio ni video de YouTube**: la canción es un `videoId`. Hay un
-selector arriba del buscador:
+pantalla. **No se descarga ni se extrae audio ni video de YouTube**: la canción es un `videoId`.
 
-| Versión | Qué suena | Letra |
-|---|---|---|
-| 🎵 **Original** (por defecto) | el audio de estudio (oficial / "Audio" / lyric video) cuya duración es igual (≤ 2 s) a la versión de la letra | **a tiempo sola, sin tocar nada** (mismo master que usó LRCLIB) |
-| 🎤 **Karaoke** | un karaoke sin voz (filtro de [server/karaoke.js](server/karaoke.js)) | puede salir corrida: se avisa y se alinea con el botón 🎯 |
+**Todas las canciones se cantan en versión karaoke (sin voz)**: se elige el karaoke reproducible que mejor calza
+(filtro de [server/karaoke.js](server/karaoke.js) + duración parecida a la versión de la letra). La letra de un karaoke
+puede salir corrida (ver abajo): se avisa y se alinea con el botón 🎯. (El motor también sabe elegir el audio
+**original** de estudio, cuya letra cae sola —ids `lr-<id>-o`—, pero esa opción no se muestra en el celu.)
 
 **Por qué esto y no otra cosa** (medido con videos reales, ver el historial del proyecto): la *duración* de un
 karaoke regrabado **no** garantiza la sincronía (un karaoke de Karol G de Party Tyme dura lo mismo que la
@@ -214,7 +213,7 @@ registrada: después de reiniciar el server, el primer toque en "Quiero cantar" 
 
 ### Puntaje (100 puntos, entendible)
 
-`Canción (0–40)` = 40 × lo que se cantó · `Retos (0–30)` = 3 retos de 10 puntos ·
+`Canción (0–40)` = 40 × lo que se cantó · `Retos (0–30)` = los retos de la canción (cada uno vale 30 ÷ cantidad) ·
 `Público (0–30)` = ❤️×1 + 🔥×1,5 + 👏×1 (20 ponderadas = 30 puntos).
 
 Los puntos de retos **los lleva el server** (cada reto se registra por id, una sola vez,
@@ -254,24 +253,31 @@ guardan en el leaderboard.
 
 ### Video privado
 
-La pantalla **siempre graba** un **video compuesto** (cámara + letra) con **audio de la
-canción + la voz**, pero **solo se genera si la persona lo pide**: al terminar, el celu muestra
-**🎬 Generar mi video** (o "No, gracias"). Recién ahí la pantalla lo sube al server y se convierte
-a **.mp4** con ffmpeg. La pantalla guarda la grabación en memoria unos 20 minutos (las últimas 3).
+La pantalla **siempre graba** un **video compuesto** (cámara + letra) con **tu voz** (y la música si es de la
+biblioteca local), pero **solo se genera si la persona lo pide**: al terminar, el celu muestra
+**🎬 Generar mi video** (o "No, gracias"). La pantalla guarda la grabación en memoria unos 20 minutos (las últimas 3).
 En la grabación la **voz va más fuerte que la música** (música ×0,3, voz ×2,4, con compresor); los
-parlantes no se tocan. Con YouTube la música no se graba (solo lo que el micrófono escucha). El link
-lleva un token de 32 caracteres que solo recibe la persona (en su celu y en el QR del
-resultado). Solo se acepta una subida por performance, hasta 150 MB, y los videos se
-**borran a las 6 horas**.
+parlantes no se tocan. Con YouTube la música no se graba (solo lo que el micrófono escucha).
+
+**Se graba directo en MP4** (H.264 + AAC, Chrome ≥ 126): el server solo lo "empaqueta" (`-c copy`, +faststart)
+en **milisegundos**, sin recodificar. Antes se grababa en webm y se recodificaba en el server: en un servidor
+gratuito (CPU compartida) podía tardar más que la canción y el celu quedaba en "procesando" para siempre. Si el
+navegador solo sabe webm se recodifica (más liviano: 540p), de **a una conversión por vez**, con **progreso**, un tope
+de 12 min y la grabación sin procesar disponible para **verla ya**. Lo que queda a medias por un reinicio del
+server **se retoma solo** al arrancar (o cuando alguien consulta el estado).
+
+El link lleva un token de 32 caracteres que solo recibe la persona (en su celu y en el QR del
+resultado). Solo se acepta una subida por performance, hasta 200 MB, y los videos se **borran a las 6 horas**.
 
 Cada video tiene su **estado** (`GET /api/video/<token>/estado`) y el celu lo consulta solo:
 
 | Estado | Qué ve la persona |
 |---|---|
-| `esperando` | 🎥 Procesando tu video… (la pantalla todavía lo está enviando) |
-| `procesando` | 🎥 Procesando tu video… (se está convirtiendo a mp4) |
+| `guardando` / `disponible` | 🎬 ¿Querés tu video? (se grabó; se genera si lo pedís) |
+| `solicitado` | 🎥 Pidiendo tu video… (la pantalla lo está enviando) |
+| `procesando` | 🎥 Generando tu video… **NN %** (con "Ver ahora" si ya llegó la grabación) |
 | `listo` | 🎥 Tu video está listo → **Ver / descargar** (y el celu vibra) |
-| `error` | no pudimos prepararlo (si la conversión falló pero el archivo llegó, se ve igual en webm) |
+| `error` | no pudimos prepararlo (si la conversión falló pero el archivo llegó, se puede abrir igual) |
 | `desconocido` | el video ya no está (token inexistente o borrado) |
 
 La pantalla reintenta la subida y, si no hay caso, avisa al server (`pantalla:videoError`)
@@ -339,8 +345,10 @@ caída: los retos con gestos se saltean y el reto de la palabra sigue funcionand
 
 ### Retos durante la canción
 
-[retos.js](web/src/lib/retos.js) arma, para cada performance, un **plan de 3 retos de 10
-puntos** (tope 30), atado a la canción:
+[retos.js](web/src/lib/retos.js) arma, para cada performance, un **plan de retos: uno cada ~30 s**
+(entre 3 y 7 según lo que dure la canción; una de cada 3 es la de **completar la palabra** y el resto,
+gestos con la mano distintos sin repetirse seguidos). Cada reto vale 30 ÷ cantidad (tope total 30 puntos,
+p. ej. 5 retos de 6). Atado a la canción:
 
 - Cada reto arranca en el **comienzo de una línea de letra**, en segundos de **audio** (el
   mismo reloj que la letra: nada de temporizadores propios que se desfasen).
@@ -348,8 +356,9 @@ puntos** (tope 30), atado a la canción:
   gesto se llena una línea verde: la persona ve que la detecta.
 - Un gesto cuenta recién cuando se **sostiene** (≈0,4 s, con tolerancia al parpadeo). Una
   vez cumplido, el reto termina: aunque mantengas las manos arriba 3 s, suma **una** vez.
-- Al cumplirse: **✓ ¡LO HICISTE! +10 PUNTOS**. Si se acaba el tiempo, termina sin puntos.
-- Sin cámara o sin tracking, los retos de gestos se saltean y la canción sigue.
+- Al cumplirse: **✓ ¡LO HICISTE! +N PUNTOS** (abajo, sin tapar la letra). Si se acaba el tiempo, termina sin puntos.
+- Para que no se pierdan retos: si no hay una palabra adecuada tras unos segundos, el reto pasa a ser un gesto; si no hay
+  cámara o tracking de manos, los gestos pasan a ser de la palabra (que se contesta desde el celu).
 
 Gestos disponibles: ✋ una mano · 🙌 dos manos · 👋 saludo · 💖 corazón · ✊ puño alto ·
 ✌️ paz · 👆 señalar al cielo.

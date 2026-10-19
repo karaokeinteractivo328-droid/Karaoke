@@ -112,6 +112,29 @@ test('palabra: se publican las opciones pero NUNCA la respuesta correcta', () =>
   assert.equal(JSON.stringify(m.e.snapshot()).includes('"correcta"'), false);
 });
 
+test('palabra: con mas retos por cancion cada uno vale menos (la pantalla avisa cuanto) y el total sigue topeado en 30', () => {
+  const m = mundo();
+  const a = m.persona(1, 'A');
+  m.e.entrarFila(a);
+  aEscenario(m, a);
+  assert.equal(m.e.pantallaRetoPalabra({ ...RETO, puntos: 6 }).ok, true);
+  const r = m.e.responderReto(a, { id: 'w1', opcion: 1 });
+  assert.equal(r.acierto, true);
+  assert.equal(m.e.snapshot().actual.retosPuntos, 6, 'la palabra vale 6, como los gestos de ese plan');
+  assert.equal(m.retosRes.at(-1).puntos, 6);
+  // 5 gestos de 6 puntos: el total no pasa de 30
+  for (let i = 1; i <= 6; i++) m.e.pantallaRetoCumplido({ id: `g${i}`, tipo: 'saludo', puntos: 6 });
+  assert.equal(m.e.snapshot().actual.retosPuntos, 30, 'tope de 30');
+  // un valor absurdo no se acepta (nunca mas de 10 por reto)
+  const m2 = mundo();
+  const b = m2.persona(2, 'B');
+  m2.e.entrarFila(b);
+  aEscenario(m2, b);
+  m2.e.pantallaRetoPalabra({ ...RETO, puntos: 999 });
+  m2.e.responderReto(b, { id: 'w1', opcion: 1 });
+  assert.equal(m2.e.snapshot().actual.retosPuntos, 10);
+});
+
 test('palabra: el cantante responde bien -> se compara, acierta y suma 10', () => {
   const m = mundo();
   const a = m.persona(1, 'A');

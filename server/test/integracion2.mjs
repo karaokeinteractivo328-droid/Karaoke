@@ -86,6 +86,19 @@ async function hasta(fn, ms = 6000, msg = 'condicion') {
 }
 const tk = (n) => `integra2-${n}`.padEnd(24, 'x');
 
+// MP4 fragmentado como el que graba Chrome con MediaRecorder (H.264 + AAC)
+function crearMp4Crudo(destino) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      ffmpegPath,
+      ['-y', '-f', 'lavfi', '-i', 'testsrc=duration=3:size=640x360:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-shortest', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', destino],
+      { timeout: 60_000 },
+      (err, _o, stderr) => (err ? reject(new Error(stderr.split('\n').slice(-5).join('\n'))) : resolve())
+    );
+  });
+}
+
 function crearWebm(destino) {
   return new Promise((resolve, reject) => {
     execFile(
@@ -285,6 +298,24 @@ try {
   await espera(200);
   est = await (await fetch(`${BASE}/api/video/${tokB}/estado`)).json();
   ok(est.estado === 'error', 'si la pantalla no puede subir, el celu ve un error claro (no espera para siempre)');
+
+  // La pantalla graba en MP4: el server solo lo empaqueta (sin recodificar), asi que queda listo al toque
+  const mp4Crudo = join(tmpdir(), `karaoke-test-${Date.now()}.rec.mp4`);
+  await crearMp4Crudo(mp4Crudo);
+  const cuerpoMp4 = await readFile(mp4Crudo);
+  const t0 = Date.now();
+  const subeMp4 = await fetch(`${BASE}/api/video/${tokB}`, { method: 'POST', headers: { 'Content-Type': 'video/mp4', 'X-Duracion': '3' }, body: cuerpoMp4 });
+  ok(subeMp4.ok, `la pantalla sube el MP4 que grabo Chrome (${(cuerpoMp4.length / 1000).toFixed(0)} KB)`);
+  let estB = {};
+  for (let i = 0; i < 60 && estB.estado !== 'listo'; i++) { estB = await (await fetch(`${BASE}/api/video/${tokB}/estado`)).json(); if (estB.estado !== 'listo') await espera(100); }
+  ok(estB.estado === 'listo', `el MP4 queda LISTO en ${((Date.now() - t0) / 1000).toFixed(1)} s (empaquetado, sin recodificar)`);
+  const mp4B = await fetch(`${BASE}/video/${tokB}.mp4`);
+  const bufB = Buffer.from(await mp4B.arrayBuffer());
+  ok(mp4B.status === 200 && /video\/mp4/.test(mp4B.headers.get('content-type') || '') && bufB.length > 5000, `se descarga (${(bufB.length / 1000).toFixed(0)} KB)`);
+  ok(bufB.subarray(4, 8).toString() === 'ftyp', 'es un mp4 real');
+  const crudoSigue = await fetch(`${BASE}/video/${tokB}.rec.mp4`);
+  ok(crudoSigue.status === 404, 'la grabacion cruda se borra al terminar');
+  await rm(mp4Crudo, { force: true });
 
   // ------------------------------------------------------ F. reinicio del server
   console.log('\n== F. Reinicio del server: los celus vuelven y todo sigue andando');

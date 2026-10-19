@@ -7,12 +7,22 @@ export function crearGrabacion() {
   let chunks = [];
   let blob = null;
   let diag = { motivo: 'nunca se inicio' }; // por que no hay video (para el log de la pantalla)
+  let inicioMs = 0;
+  let duracionS = 0; // cuanto duro la ultima grabacion (el server la usa para mostrar el progreso)
 
+  // MP4 (H.264 + AAC) directo cuando el navegador puede (Chrome >= 126): el server solo lo "empaqueta"
+  // en milisegundos. Con webm, el server tiene que RECODIFICAR (lento en un servidor gratuito).
   function mimeSoportado() {
     return (
-      ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(
-        (m) => window.MediaRecorder?.isTypeSupported?.(m)
-      ) || ''
+      [
+        'video/mp4;codecs=avc1.640028,mp4a.40.2',
+        'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+        'video/mp4;codecs=avc1,mp4a.40.2',
+        'video/mp4',
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+      ].find((m) => window.MediaRecorder?.isTypeSupported?.(m)) || ''
     );
   }
 
@@ -42,6 +52,7 @@ export function crearGrabacion() {
     rec.ondataavailable = (e) => e.data && e.data.size && chunks.push(e.data);
     rec.onerror = (e) => { diag = { motivo: 'error del grabador: ' + (e.error?.message || e.type) }; };
     rec.start(1000);
+    inicioMs = performance.now();
     diag = { motivo: 'grabando', mime: rec.mimeType, audio: at.length > 0 };
   }
 
@@ -55,7 +66,8 @@ export function crearGrabacion() {
         if (listo) return;
         listo = true;
         clearTimeout(seguridad);
-        const b = chunks.length ? new Blob(chunks, { type: chunks[0]?.type || 'video/webm' }) : null;
+        duracionS = inicioMs ? (performance.now() - inicioMs) / 1000 : 0;
+        const b = chunks.length ? new Blob(chunks, { type: chunks[0]?.type || rec?.mimeType || 'video/webm' }) : null;
         rec = null;
         chunks = [];
         resolve(b);
@@ -71,6 +83,7 @@ export function crearGrabacion() {
     iniciar,
     detener,
     get blob() { return blob; },
+    get duracion() { return duracionS; },
     get grabando() { return rec?.state === 'recording'; },
     get diagnostico() { return { ...diag, trozos: chunks.length }; },
   };

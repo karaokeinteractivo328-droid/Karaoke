@@ -858,10 +858,10 @@ const mezclado = (a) => a.map((x) => [Math.random(), x]).sort((p, q) => p[0] - q
 function prepararPalabra(tAudio) {
   if (espejo || palabraTapada || palabraEstado || !socket.connected) return null;
   const t = reloj.letra(offsetLetra); // tiempo de letra (el mismo que usa la pantalla)
-  // la palabra tiene que llegar con tiempo para contestar (3.5 s a 12 s)
+  // la palabra tiene que llegar con tiempo para contestar (2.6 s a 12 s)
   const cand = palabras
     .map((p) => ({ ...p, txt: limpiar(p.span.textContent) }))
-    .filter((p) => p.t0 - t >= 3.5 && p.t0 - t <= 12 && p.txt.length >= 3);
+    .filter((p) => p.t0 - t >= 2.6 && p.t0 - t <= 12 && p.txt.length >= 3);
   if (!cand.length) return null;
   const elegida = cand.sort((a, b) => b.txt.length - a.txt.length || b.t0 - a.t0)[0];
   const correcta = elegida.txt;
@@ -881,7 +881,7 @@ function prepararPalabra(tAudio) {
   if (pool.length < 2) return null;
   pool.sort((a, b) => Math.abs(a.length - correcta.length) - Math.abs(b.length - correcta.length) || Math.random() - 0.5);
   const opciones = mezclado([correcta, pool[0], pool[1]]);
-  const dur = Math.min(10, Math.max(2.5, elegida.t0 - t - 0.3));
+  const dur = Math.min(10, Math.max(2.3, elegida.t0 - t - 0.3));
   const id = Math.random().toString(36).slice(2, 8);
 
   palabraTapada = { span: elegida.span, texto: elegida.span.textContent, t0: elegida.t0 };
@@ -890,7 +890,7 @@ function prepararPalabra(tAudio) {
   palabraEstado = { id, opciones, respondida: false };
 
   const limite = setTimeout(() => retos.cancelarPalabra(id), 2500); // el server no contesto
-  socket.emit('pantalla:retoPalabra', { id, opciones, correcta: opciones.indexOf(correcta), dur }, (r) => {
+  socket.emit('pantalla:retoPalabra', { id, opciones, correcta: opciones.indexOf(correcta), dur, puntos: retos.valor }, (r) => {
     clearTimeout(limite);
     if (!r?.ok) retos.cancelarPalabra(id);
   });
@@ -1059,15 +1059,15 @@ async function mostrarResultado(s) {
     if (token) socket.emit('pantalla:videoError', { token });
     return;
   }
-  guardarVideo(token, blob);
+  guardarVideo(token, blob, grabacion.duracion);
   socket.emit('pantalla:videoGrabado', { token });
 }
 
 // Videos grabados esperando que alguien los pida (solo los ultimos: pesan decenas de MB).
 const videosGuardados = new Map(); // token -> { blob, t }
 const MAX_VIDEOS_GUARDADOS = 3;
-function guardarVideo(token, blob) {
-  videosGuardados.set(token, { blob, t: Date.now() });
+function guardarVideo(token, blob, duracion = 0) {
+  videosGuardados.set(token, { blob, duracion, t: Date.now() });
   while (videosGuardados.size > MAX_VIDEOS_GUARDADOS) videosGuardados.delete(videosGuardados.keys().next().value);
 }
 
@@ -1084,7 +1084,8 @@ async function subirVideo(token) {
     try {
       const resp = await fetch(`${SOCKET_URL}/api/video/${token}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'video/webm' },
+        // mp4 (el server lo empaqueta sin recodificar) o webm (lo recodifica); `X-Duracion` es para mostrar el progreso
+        headers: { 'Content-Type': (g.blob.type || 'video/webm').split(';')[0], 'X-Duracion': String(Math.round(g.duracion || 0)) },
         body: g.blob,
       });
       if (resp.ok || resp.status === 409) { videosGuardados.delete(token); return; }

@@ -160,10 +160,29 @@ function elegirVista() {
   }
 }
 
+// El codigo para invitar a un copiloto (o al compañero del dueto) se ve en la fila, en "tu turno",
+// en la cuenta regresiva y mientras cantas: antes solo estaba en la fila y quien pasaba directo
+// a cantar nunca lo veia.
+function pintarCodigo() {
+  const hay = !!yo?.codigoCopiloto && ['QUEUED', 'CALLED', 'SINGING'].includes(yo.estado);
+  const texto = yo?.copiloto
+    ? `${yo.copiloto.nombre} es tu ${yo.modo === 'duo' ? 'compañero/a de dúo' : 'copiloto'} 🤝`
+    : yo?.modo === 'duo'
+      ? 'Dúo: pasale este código a tu compañero/a. En su celu: "Tengo un código de copiloto". Va a cantar la VOZ 2.'
+      : 'Que escriba este código en su celu ("Tengo un código de copiloto") para ayudarte con la letra.';
+  for (const box of document.querySelectorAll('[data-codigo-box]')) {
+    box.hidden = !hay;
+    if (!hay) continue;
+    box.querySelector('[data-codigo]').textContent = yo.codigoCopiloto;
+    box.querySelector('[data-codigo-estado]').textContent = texto;
+  }
+}
+
 function render() {
   if (!est) return;
   const vista = elegirVista();
   for (const v of VISTAS) $(v).hidden = v !== vista;
+  pintarCodigo();
 
   // avisos al cambiar de estado
   const estadoAhora = yo?.estado || '';
@@ -256,16 +275,7 @@ function renderFila() {
   const a = est.actual;
   $('filaAhora').textContent = a && est.etapa !== 'STANDBY' ? `Ahora: ${a.nombre}${a.cancion ? ` · ${a.cancion.titulo}` : ''}` : '';
   $('filaCancion').textContent = yo.cancion ? tituloDe(yo.cancion) : 'Todavía no elegiste';
-  const box = $('boxCodigo');
-  box.hidden = !yo.codigoCopiloto;
-  if (yo.codigoCopiloto) {
-    $('codigoCopiloto').textContent = yo.codigoCopiloto;
-    $('copilotoEstado').textContent = yo.copiloto
-      ? `${yo.copiloto.nombre} es tu copiloto 🤝`
-      : yo.modo === 'duo'
-        ? 'Dúo: pasale este código a tu compañero/a. Va a cantar la VOZ 2.'
-        : 'Que escriba este código en su celu para ayudarte con la letra.';
-  }
+  pintarCodigo();
 }
 
 // ------------------------------------------------------------------ TURNO
@@ -350,7 +360,7 @@ function renderResultado() {
 // El video de cada performance tiene su propio token y su propio estado en el
 // server: esperando -> procesando -> listo (o error). El celu lo consulta solo
 // y avisa cuando esta listo, sin que la persona tenga que recargar nada.
-let video = { token: '', estado: 'guardando', omitido: '' };
+let video = { token: '', estado: 'guardando', omitido: '', progreso: null, crudo: null };
 
 function pintarVideo() {
   const link = $('resVideo');
@@ -363,11 +373,13 @@ function pintarVideo() {
   link.href = `${SOCKET_URL}/video/${yo.videoToken}`;
   const e = video.token === yo.videoToken ? video.estado : 'guardando';
   const omitido = video.omitido === yo.videoToken && e === 'disponible';
+  const pct = video.token === yo.videoToken && video.progreso != null ? Math.round(video.progreso * 100) : null;
+  const crudo = video.token === yo.videoToken ? video.crudo : null; // la grabacion sin procesar: se puede abrir ya
   const titulo = {
     guardando: '🎥 Guardando tu grabación…',
     disponible: omitido ? '🎥 Sin video esta vez' : '🎥 ¿Querés tu video?',
     solicitado: '🎥 Pidiendo tu video…',
-    procesando: '🎥 Generando tu video…',
+    procesando: `🎥 Generando tu video…${pct != null ? ` ${pct} %` : ''}`,
     listo: '🎥 Tu video está listo',
     error: '🎥 Tu video',
     vencido: '🎥 Tu video',
@@ -379,7 +391,7 @@ function pintarVideo() {
       ? 'Listo: no se genera el video de esta canción.'
       : 'Se grabó tu canción. Generarlo tarda como un minuto. Es privado y se borra a las 6 horas.',
     solicitado: 'La pantalla lo está enviando…',
-    procesando: 'Puede tardar un minuto. Te avisamos acá apenas esté listo.',
+    procesando: crudo ? 'Ya se puede ver ahora; en un rato queda la versión final. Te avisamos.' : 'Puede tardar un minuto. Te avisamos acá apenas esté listo.',
     listo: 'Es privado: solo lo ves con este link. Se borra en 6 horas.',
     error: 'No pudimos prepararlo del todo. Tocá el botón por si se puede ver igual.',
     vencido: 'La pantalla ya no tiene la grabación guardada (se guarda unos minutos). ¡Cantá de nuevo!',
@@ -387,8 +399,10 @@ function pintarVideo() {
   }[e] || '';
   $('resVideoTitulo').textContent = titulo;
   txt.textContent = texto;
-  link.hidden = !(e === 'listo' || e === 'error');
-  link.textContent = e === 'listo' ? '▶ Ver / descargar' : 'Probar abrir mi video';
+  const verCrudo = (e === 'procesando' || e === 'error') && !!crudo;
+  link.href = verCrudo ? `${SOCKET_URL}${crudo}` : `${SOCKET_URL}/video/${yo.videoToken}`;
+  link.hidden = !(e === 'listo' || e === 'error' || verCrudo);
+  link.textContent = e === 'listo' ? '▶ Ver / descargar' : verCrudo ? '▶ Ver ahora (sin esperar)' : 'Probar abrir mi video';
   $('btnGenerarVideo').hidden = !(e === 'disponible' && !omitido);
   $('btnNoVideo').hidden = !(e === 'disponible' && !omitido);
 }
@@ -396,7 +410,7 @@ function pintarVideo() {
 $('btnGenerarVideo').addEventListener('click', async () => {
   const token = yo?.videoToken;
   if (!token) return;
-  video = { token, estado: 'solicitado', omitido: '' };
+  video = { token, estado: 'solicitado', omitido: '', progreso: null, crudo: null };
   pintarVideo();
   try {
     const r = await fetch(`${SOCKET_URL}/api/video/${token}/generar`, { method: 'POST' });
@@ -435,7 +449,7 @@ async function consultarVideo(forzar = false) {
     const j = await r.json();
     if (token !== yo?.videoToken) return;
     const previo = video.token === token ? video.estado : '';
-    video = { token, estado: j.estado, omitido: video.token === token ? video.omitido : '' };
+    video = { token, estado: j.estado, omitido: video.token === token ? video.omitido : '', progreso: j.progreso ?? null, crudo: j.crudo || null };
     if (j.estado === 'listo' && previo !== 'listo') {
       vibrar([80, 50, 80]);
       mostrarAviso('🎥 ¡Tu video está listo!', 6000);
@@ -553,19 +567,9 @@ function pintarAudio() {
   }
 }
 
-// Version de la cancion: ORIGINAL (audio de estudio: la letra cae a tiempo sola) o KARAOKE (sin voz,
-// pero la letra puede salir corrida). La eleccion se recuerda en este celu.
-const AYUDA_TIPO = {
-  original: 'Suena el tema original: la letra siempre va a tiempo, sin tocar nada.',
-  karaoke: 'Sin la voz del cantante, pero la letra puede salir corrida (y se alinea con un botón).',
-};
-let tipoVersion = (() => { try { return localStorage.getItem('karaoke:tipo') === 'karaoke' ? 'karaoke' : 'original'; } catch { return 'original'; } })();
-function pintarTipo() {
-  for (const b of document.querySelectorAll('[data-tipo-btn]')) b.classList.toggle('on', b.dataset.tipoBtn === tipoVersion);
-  for (const p of document.querySelectorAll('[data-tipo-ayuda]')) p.textContent = AYUDA_TIPO[tipoVersion];
-}
-// los ids de LRCLIB llevan la version elegida: "lr-123" -> "lr-123-o" / "lr-123-k"
-const idConVersion = (id) => (/^lr-\d+$/.test(id) ? `${id}-${tipoVersion === 'karaoke' ? 'k' : 'o'}` : id);
+// Todas las canciones se cantan en version KARAOKE (sin voz). Los ids de LRCLIB llevan la version:
+// "lr-123" -> "lr-123-k".
+const idConVersion = (id) => (/^lr-\d+$/.test(id) ? `${id}-k` : id);
 const esLaElegida = (id) => !!yo?.cancionId && (yo.cancionId === id || yo.cancionId.startsWith(`${id}-`));
 
 // Una tarjeta de resultado: titulo, artista, duracion, etiqueta y boton ELEGIR.
@@ -707,13 +711,6 @@ function elegirModo(modo) {
 }
 
 document.addEventListener('click', (e) => {
-  const tipo = e.target.closest?.('[data-tipo-btn]');
-  if (tipo) {
-    tipoVersion = tipo.dataset.tipoBtn === 'karaoke' ? 'karaoke' : 'original';
-    try { localStorage.setItem('karaoke:tipo', tipoVersion); } catch {}
-    pintarTipo();
-    return;
-  }
   const li = e.target.closest?.('.canciones li');
   if (li && li.dataset.id) {
     elegirCancion(li.dataset.id);
@@ -901,5 +898,4 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---------------------------------------------------------------- canciones
-pintarTipo();
 buscador.iniciar(); // arranca con la biblioteca local (lo que se puede cantar ya)

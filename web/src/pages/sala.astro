@@ -73,11 +73,6 @@ import Base from '../layouts/Base.astro';
           <button data-modo="duo">👥 Dúo</button>
         </div>
         <p class="chico" data-modo-ayuda></p>
-        <div class="tipoVersion" data-tipo>
-          <button type="button" data-tipo-btn="original">🎵 Original<small>letra a tiempo</small></button>
-          <button type="button" data-tipo-btn="karaoke">🎤 Karaoke<small>sin voz</small></button>
-        </div>
-        <p class="chico" data-tipo-ayuda></p>
         <input class="buscar" type="search" placeholder="Buscá por artista o título" autocomplete="off" enterkeyhint="search" />
         <p class="chico buscarEstado" data-buscar-estado></p>
         <ul class="canciones"></ul>
@@ -87,10 +82,10 @@ import Base from '../layouts/Base.astro';
         </div>
         <button class="link" data-buscar-mas hidden>Ver más canciones</button>
       </div>
-      <div class="tarjeta" id="boxCodigo" hidden>
-        <p class="kicker">invitar copiloto 🤝</p>
-        <p class="codigo" id="codigoCopiloto"></p>
-        <p class="chico" id="copilotoEstado">Que escriba este código en su celu para ayudarte con la letra.</p>
+      <div class="tarjeta codigoCard" data-codigo-box hidden>
+        <p class="kicker">invitar copiloto / dúo 🤝</p>
+        <p class="codigo" data-codigo></p>
+        <p class="chico" data-codigo-estado></p>
       </div>
       <div class="reacciones chicas" data-reacciones></div>
       <button id="btnSalir" class="link">Salir de la fila</button>
@@ -106,6 +101,11 @@ import Base from '../layouts/Base.astro';
         <div class="barra" id="turnoBarra"><span></span></div>
       </div>
       <button id="btnListo" class="boton" disabled>⏳ Preparando el audio…</button>
+      <div class="tarjeta codigoCard" data-codigo-box hidden>
+        <p class="kicker">invitar copiloto / dúo 🤝</p>
+        <p class="codigo" data-codigo></p>
+        <p class="chico" data-codigo-estado></p>
+      </div>
       <div class="tarjeta" data-selector>
         <p class="kicker">🎵 ¿qué querés cantar?</p>
         <div class="audioEstado" data-audio-estado hidden>
@@ -122,11 +122,6 @@ import Base from '../layouts/Base.astro';
           <button data-modo="duo">👥 Dúo</button>
         </div>
         <p class="chico" data-modo-ayuda></p>
-        <div class="tipoVersion" data-tipo>
-          <button type="button" data-tipo-btn="original">🎵 Original<small>letra a tiempo</small></button>
-          <button type="button" data-tipo-btn="karaoke">🎤 Karaoke<small>sin voz</small></button>
-        </div>
-        <p class="chico" data-tipo-ayuda></p>
         <input class="buscar" type="search" placeholder="Buscá por artista o título" autocomplete="off" enterkeyhint="search" />
         <p class="chico buscarEstado" data-buscar-estado></p>
         <ul class="canciones"></ul>
@@ -144,6 +139,11 @@ import Base from '../layouts/Base.astro';
       <p class="kicker">preparate</p>
       <p class="cuentaGrande" id="cuentaNum">3</p>
       <p class="grandeTxt" id="cuentaCancion"></p>
+      <div class="tarjeta codigoCard" data-codigo-box hidden>
+        <p class="kicker">invitar copiloto / dúo 🤝</p>
+        <p class="codigo" data-codigo></p>
+        <p class="chico" data-codigo-estado></p>
+      </div>
     </section>
 
     <!-- SINGING -->
@@ -174,6 +174,11 @@ import Base from '../layouts/Base.astro';
           <button class="boton chicoBtn" data-sync="0.5">Va adelantada ⏩</button>
         </div>
         <p class="chico syncAviso" data-sync-aviso hidden></p>
+      </div>
+      <div class="tarjeta codigoCard" data-codigo-box hidden>
+        <p class="kicker">invitar copiloto / dúo 🤝</p>
+        <p class="codigo" data-codigo></p>
+        <p class="chico" data-codigo-estado></p>
       </div>
       <button id="btnTerminar" class="link">Terminar canción</button>
     </section>
@@ -282,10 +287,7 @@ import Base from '../layouts/Base.astro';
     .boton.chicoBtn { font-size: 1rem; padding: 0.7rem 1rem; margin-top: 0.6rem; }
     .boton:disabled { opacity: 0.55; }
     #btnGenerarVideo[hidden], #btnNoVideo[hidden] { display: none; }
-    .tipoVersion { display: flex; gap: 0.5rem; margin: 0.4rem 0; }
-    .tipoVersion button { flex: 1; font-family: var(--fat); text-transform: uppercase; font-size: 0.85rem; border: 2px solid var(--tinta); background: #fff; color: var(--tinta); border-radius: 0.6rem; padding: 0.5rem 0.4rem; cursor: pointer; line-height: 1.1; }
-    .tipoVersion button small { display: block; font-family: var(--body); font-weight: 600; text-transform: none; font-size: 0.7rem; opacity: 0.7; margin-top: 0.15rem; }
-    .tipoVersion button.on { background: var(--tinta); color: #fff; }
+    .codigoCard .codigo { font-size: 2.4rem; letter-spacing: 0.35em; margin: 0.2rem 0; }
     .syncFila { display: flex; gap: 0.5rem; }
     .syncFila .boton { flex: 1; }
     .syncBox .chico { margin: 0.2rem 0; }

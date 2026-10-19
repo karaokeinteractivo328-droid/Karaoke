@@ -1,7 +1,7 @@
 // Retos con las manos durante la cancion.
 //
-// - PLANIFICADOS: cada performance tiene un plan de RETOS_POR_CANCION retos,
-//   cada uno atado a un instante de la cancion (en segundos de AUDIO, el mismo
+// - PLANIFICADOS: cada performance tiene un plan de retos (uno cada ~30 s: entre 3 y 7 segun lo que
+//   dure la cancion), cada uno atado a un instante de la cancion (en segundos de AUDIO, el mismo
 //   reloj que usa la letra) y alineado al comienzo de una linea de letra. No
 //   aparecen al azar ni dependen de un temporizador propio que se desfase.
 // - VALIDADOS: un gesto cuenta solo si se SOSTIENE `hold` ms (con 150 ms de
@@ -14,8 +14,22 @@
 //
 // Consume `datos` de manos.js: { manos, unaArriba, dosArriba, saludo, corazon, ... }.
 
-export const PUNTOS_RETO = 10;
-export const RETOS_POR_CANCION = 3; // 3 x 10 = 30, el tope de retos del puntaje
+export const PUNTOS_RETO = 10; // lo maximo que vale un reto (cuando hay pocos)
+export const PUNTOS_TOTAL_RETOS = 30; // el tope de retos del puntaje (Cancion 40 + Retos 30 + Publico 30)
+export const INTERVALO_RETOS_S = 30; // un reto cada ~30 s: seguido, pero sin abrumar (cada reto dura 7-10 s)
+export const MIN_RETOS = 3;
+export const MAX_RETOS = 7;
+export const RETOS_POR_CANCION = MIN_RETOS; // (compatibilidad: el minimo)
+
+// Zona "util" de la cancion: ni al arranque ni sobre el final
+const ventanaRetos = (dur) => ({ desde: Math.max(12, dur * 0.07), hasta: dur - Math.max(18, dur * 0.08) });
+export function cantidadDeRetos(duracion) {
+  const dur = Math.max(30, Number(duracion) || 0);
+  const { desde, hasta } = ventanaRetos(dur);
+  return Math.max(MIN_RETOS, Math.min(MAX_RETOS, Math.floor((hasta - desde) / INTERVALO_RETOS_S)));
+}
+// con mas retos cada uno vale menos: el total de retos sigue topeado en 30 puntos
+export const puntosPorReto = (cantidad) => Math.max(3, Math.min(PUNTOS_RETO, Math.round(PUNTOS_TOTAL_RETOS / Math.max(1, cantidad))));
 const TOLERANCIA_PARPADEO = 0.15; // s sin el gesto antes de reiniciar la espera
 
 // --- poses de la mano (sobre los 21 landmarks) ---
@@ -57,30 +71,47 @@ function mezclar(a, azar) {
   return r;
 }
 
+// Que tipo va en cada lugar del plan: una de cada 3 es de la palabra (si hay letra) y el resto, gestos
+// variados (los primeros, faciles de entender) sin repetir el mismo dos veces seguidas.
+function asignarTipos(n, conPalabra, azar) {
+  const palabras = conPalabra ? Math.max(1, Math.round(n / 3)) : 0;
+  const lugaresPalabra = new Set();
+  for (let j = 0; j < palabras; j++) lugaresPalabra.add(Math.min(n - 1, Math.floor(((j + 0.5) * n) / palabras)));
+  const tipos = [];
+  let bolsa = [];
+  for (let i = 0; i < n; i++) {
+    if (lugaresPalabra.has(i)) { tipos.push('palabra'); continue; }
+    if (!bolsa.length) bolsa = mezclar(i < 2 ? FACILES : GESTOS, azar);
+    let g = bolsa.shift();
+    if (g === tipos.at(-1) && bolsa.length) { bolsa.push(g); g = bolsa.shift(); }
+    tipos.push(g);
+  }
+  return tipos;
+}
+
 // Plan de la performance: [{ at, tipo, estado }] ordenado por `at` (s de audio).
 //  duracion : segundos de la cancion
 //  inicios  : segundos (de audio) en que arranca cada linea de letra
-export function armarPlan({ duracion, inicios = [], conPalabra = true, azar = Math.random, cantidad = RETOS_POR_CANCION }) {
+// El arreglo trae `valor` (puntos de cada reto) y `conPalabra`.
+export function armarPlan({ duracion, inicios = [], conPalabra = true, azar = Math.random, cantidad } = {}) {
   const dur = Math.max(30, Number(duracion) || 0);
-  // reparto en la parte "util" de la cancion: ni al arranque ni sobre el final
-  const desde = Math.max(14, dur * 0.18);
-  const hasta = dur - Math.max(20, dur * 0.12);
+  const n = cantidad ?? cantidadDeRetos(dur);
+  const { desde, hasta } = ventanaRetos(dur);
   const lineas = [...inicios].filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
-  const tipos = mezclar(FACILES, azar).slice(0, cantidad);
-  if (conPalabra) tipos[Math.floor(azar() * cantidad)] = 'palabra';
-  // completa con otros gestos si hacia falta (ej. sin palabra)
-  for (let i = 0; i < cantidad; i++) {
-    if (!tipos[i]) tipos[i] = mezclar(GESTOS.filter((g) => !tipos.includes(g)), azar)[0];
-  }
+  const tipos = asignarTipos(n, conPalabra, azar);
+  const cantidadFinal = n;
   const plan = [];
-  for (let k = 0; k < cantidad; k++) {
-    let at = desde + ((hasta - desde) * (k + 0.5)) / cantidad;
+  for (let k = 0; k < cantidadFinal; k++) {
+    let at = desde + ((hasta - desde) * (k + 0.5)) / cantidadFinal;
     // alinear al comienzo de la linea de letra que arranca justo despues
     const linea = lineas.find((t) => t >= at - 1 && t < at + 12);
     if (linea !== undefined) at = linea;
     plan.push({ at, tipo: tipos[k], estado: 'pendiente' });
   }
-  return plan.sort((a, b) => a.at - b.at);
+  plan.sort((a, b) => a.at - b.at);
+  plan.valor = puntosPorReto(cantidadFinal);
+  plan.conPalabra = !!conPalabra;
+  return plan;
 }
 
 // callbacks:
@@ -94,6 +125,7 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
   let activo = null; // { id, item, reto, hasta, okDesde, ultimoOk, opciones? }
   let seq = 0;
   let puntaje = 0; // solo informativo: los puntos "de verdad" los lleva el server
+  let valor = PUNTOS_RETO; // lo que vale cada reto de ESTE plan (con mas retos, cada uno vale menos)
 
   function reset() {
     activo = null;
@@ -105,6 +137,7 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
   function planificar(opts) {
     reset();
     plan = armarPlan({ azar, ...opts });
+    valor = plan.valor;
     return plan;
   }
 
@@ -122,7 +155,7 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
       tipo: r.tipo || 'gesto',
       icono: r.icono,
       texto: r.texto,
-      puntos: PUNTOS_RETO,
+      puntos: valor,
       opciones: activo.opciones || null,
       resto: Math.max(0, Math.min(1, (activo.hasta - t) / (activo.hasta - activo.desde))),
       sostener: activo.hold && activo.okDesde ? Math.min(1, ((t - activo.okDesde) * 1000) / activo.hold) : 0,
@@ -151,11 +184,11 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
         activo.ultimoOk = t;
         if ((t - activo.okDesde) * 1000 >= r.hold) {
           // validado: una sola vez, el reto termina y no vuelve a sumar
-          puntaje += PUNTOS_RETO;
+          puntaje += valor;
           const id = activo.id;
           const item = activo.item;
-          onCumplido?.({ id, tipo: r.clave, puntos: PUNTOS_RETO });
-          onResultado?.({ ok: true, puntos: PUNTOS_RETO, tipo: r.clave });
+          onCumplido?.({ id, tipo: r.clave, puntos: valor });
+          onResultado?.({ ok: true, puntos: valor, tipo: r.clave });
           cerrar(item, 'cumplido');
           return;
         }
@@ -178,14 +211,24 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
 
     if (item.tipo === 'palabra') {
       const p = onPalabra?.({ t });
-      if (!p) return; // todavia no hay una palabra con tiempo suficiente: se reintenta
-      activo = { id: p.id, item, reto: RETO_PALABRA, desde: t, hasta: p.hasta, opciones: p.opciones };
-      item.estado = 'activo';
-      onCartel?.(cartel(t));
+      if (p) {
+        activo = { id: p.id, item, reto: RETO_PALABRA, desde: t, hasta: p.hasta, opciones: p.opciones };
+        item.estado = 'activo';
+        onCartel?.(cartel(t));
+        return;
+      }
+      // todavia no hay una palabra con tiempo suficiente: se reintenta en cada linea. Si pasan unos
+      // segundos y no se pudo, el reto se cambia por un gesto (si hay camara) en vez de perderse.
+      if (t > item.at + 5 && hayManos) item.tipo = FACILES[Math.floor(azar() * FACILES.length)];
+      else return;
+    }
+    // sin camara / tracking no se pueden pedir gestos: si hay letra se prueba con la palabra
+    if (!hayManos && item.tipo !== 'palabra') {
+      if (plan.conPalabra && !item.probadoPalabra) { item.probadoPalabra = true; item.tipo = 'palabra'; return; }
+      item.estado = 'salteado';
       return;
     }
     const reto = RETOS[item.tipo];
-    if (!hayManos) { item.estado = 'salteado'; return; } // sin camara no se pueden pedir gestos
     activo = { id: `r${++seq}-${Math.round(t)}`, item, reto, desde: t, hasta: t + reto.dur, okDesde: 0, ultimoOk: 0, hold: reto.hold };
     item.estado = 'activo';
     onCartel?.(cartel(t));
@@ -194,8 +237,8 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
   // el server resolvio el reto de la palabra (acierto, error o tiempo)
   function resolverPalabra({ id, acierto, timeout, palabra, puntos }) {
     if (!activo || activo.reto.tipo !== 'palabra' || activo.id !== id) return false;
-    if (acierto) puntaje += puntos ?? PUNTOS_RETO;
-    onResultado?.({ ok: !!acierto, puntos: acierto ? (puntos ?? PUNTOS_RETO) : 0, tipo: 'palabra', palabra, motivo: timeout ? 'tiempo' : undefined });
+    if (acierto) puntaje += puntos ?? valor;
+    onResultado?.({ ok: !!acierto, puntos: acierto ? (puntos ?? valor) : 0, tipo: 'palabra', palabra, motivo: timeout ? 'tiempo' : undefined });
     cerrar(activo.item, acierto ? 'cumplido' : 'perdido');
     return true;
   }
@@ -214,5 +257,6 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
     get plan() { return plan; },
     get activo() { return activo; },
     get puntaje() { return puntaje; },
+    get valor() { return valor; },
   };
 }
