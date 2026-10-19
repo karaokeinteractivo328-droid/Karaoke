@@ -1,11 +1,11 @@
-// YouTube + catalogo + busqueda, de punta a punta y SIN Internet:
-//   - la YouTube Data API v3 simulada (servidor HTTP local, via YOUTUBE_API_BASE) y lrclib simulado
+// LRCLIB manda, YouTube se adapta: de punta a punta y SIN Internet.
+//   - LRCLIB simulado (catalogo con letra) y la YouTube Data API v3 simulada (YOUTUBE_API_BASE)
 //   - el server REAL, sockets REALES, y una "pantalla" falsa que reporta lo que cargo
-// Cubre: busqueda con filtro karaoke (orden, videos no reproducibles descartados, cache,
-// paginacion con nextPageToken, limite de pedidos), eleccion con los datos guardados (videoId,
-// canal, miniatura, searchQuery, karaokeScore), que NO se descargue audio, LISTO bloqueado hasta
-// que la pantalla confirme el reproductor, video no reproducible, fallo en plena performance,
-// clave invalida, REINICIO del server con una cancion de YouTube en la fila y cuota agotada.
+// Cubre: busqueda (todo con letra, no gasta cuota), eleccion ORIGINAL (video de duracion igual a la letra,
+// letra a tiempo sin tocar nada) y KARAOKE (aviso para alinear), que NO se descargue audio, LISTO
+// bloqueado hasta que la pantalla confirme el reproductor, sin version / video que falla (reintento con el
+// siguiente), fallo en plena performance, sincronia en vivo, REINICIO del server (sin volver a gastar cuota)
+// y cuota agotada.
 //
 //   node server/test/integracion3.mjs
 import { spawn } from 'node:child_process';
@@ -13,7 +13,7 @@ import { createServer } from 'node:http';
 import { io } from 'socket.io-client';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
 const PORT = 3096;
@@ -24,17 +24,43 @@ const dir = dirname(fileURLToPath(import.meta.url));
 const tmp = await mkdtemp(join(tmpdir(), 'karaoke-int3-'));
 const CACHE = join(tmp, 'cache');
 
+// ---------------------------------------------------------------- LRCLIB falso
+const LRC = '[00:05.00] linea de prueba uno\n[00:10.00] linea de prueba dos\n';
+const pistas = Array.from({ length: 30 }, (_, i) => ({ id: 9001 + i, trackName: `Tema ${i + 1}`, artistName: `Artista ${i + 1}`, duration: 211, syncedLyrics: LRC, instrumental: false }));
+const pedidosLrclib = { search: 0, get: 0 };
+const palabrasDe = (t) => String(t).toLowerCase().split(/\s+/).filter(Boolean);
+const lrclib = createServer((req, res) => {
+  const u = new URL(req.url, 'http://x');
+  res.setHeader('content-type', 'application/json');
+  if (u.pathname === '/api/search') {
+    pedidosLrclib.search++;
+    const q = palabrasDe(u.searchParams.get('q') || '');
+    return res.end(JSON.stringify(pistas.filter((p) => q.every((w) => palabrasDe(`${p.artistName} ${p.trackName}`).includes(w)))));
+  }
+  const m = /\/api\/get\/(\d+)/.exec(u.pathname);
+  if (m) {
+    pedidosLrclib.get++;
+    const p = pistas.find((x) => x.id === Number(m[1]));
+    if (p) return res.end(JSON.stringify(p));
+  }
+  res.statusCode = 404;
+  res.end('{}');
+});
+await new Promise((r) => lrclib.listen(LRC_PORT, r));
+
 // ------------------------------------------------------ YouTube Data API v3 falsa
-const vid = (letra, n) => `${letra}${String(n).padStart(10, '0')}`; // 11 caracteres
-const NO_EMBEBIBLE = vid('N', 7);
-const nombreDe = (id) => {
-  const n = Number(id.slice(1));
-  return id[0] === 'M' ? `Artista ${n} - Tema ${n} (Official Music Video)` : `Artista ${n} - Tema ${n} (Karaoke Version)`;
-};
-const canalDe = (id) => (id[0] === 'M' ? 'VEVO' : 'Karaoke Latino');
+// ids de video: <letra><n de 10 digitos>:  O audio oficial (211 s) · Q otro audio oficial (212 s) ·
+// V en vivo (230 s) · K karaoke (213 s) · N no embebible · L audio de duracion distinta (400 s)
+const vid = (letra, n) => `${letra}${String(n).padStart(10, '0')}`;
+const nTema = (q) => Number(/Tema (\d+)/.exec(q || '')?.[1] || 0);
 let modoApi = 'ok'; // 'ok' | 'clave' | 'cuota'
 const pedidosApi = { search: 0, videos: 0 };
-const itemSnippet = (id) => ({ title: nombreDe(id), channelTitle: canalDe(id), description: 'karaoke de prueba', thumbnails: { medium: { url: `https://img.example/${id}.jpg` } } });
+const titulo = (id) => {
+  const n = Number(id.slice(1));
+  return { O: `Artista ${n} - Tema ${n} (Official Audio)`, Q: `Artista ${n} - Tema ${n} (Audio Oficial)`, V: `Artista ${n} - Tema ${n} (Live)`, K: `Artista ${n} - Tema ${n} (Karaoke Version)`, N: `Artista ${n} - Tema ${n} (Official Audio)`, L: `Artista ${n} - Tema ${n} (Official Audio)` }[id[0]];
+};
+const durDe = (id) => ({ O: 211, Q: 212, V: 230, K: 213, N: 211, L: 400 }[id[0]]);
+const snippet = (id) => ({ title: titulo(id), channelTitle: id[0] === 'K' ? 'Karaoke Latino' : 'Canal Oficial', description: 'prueba', thumbnails: { medium: { url: `https://img.example/${id}.jpg` } } });
 const ytApi = createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   res.setHeader('content-type', 'application/json');
@@ -43,23 +69,25 @@ const ytApi = createServer((req, res) => {
   if (u.pathname === '/search') {
     pedidosApi.search++;
     const q = u.searchParams.get('q') || '';
-    const pagina = Number((u.searchParams.get('pageToken') || 'T0').slice(1));
-    const letra = /karaoke|instrumental|sing along|backing/i.test(q) ? 'K' : 'M';
-    const ids = Array.from({ length: 25 }, (_, i) => (letra === 'K' && pagina === 0 && i === 7 ? NO_EMBEBIBLE : vid(letra, pagina * 25 + i + 1)));
-    return res.end(JSON.stringify({
-      nextPageToken: pagina < 1 ? `T${pagina + 1}` : undefined,
-      items: ids.map((id) => ({ id: { videoId: id }, snippet: itemSnippet(id) })),
-    }));
+    const n = nTema(q);
+    const karaoke = /karaoke/i.test(q);
+    let ids;
+    if (karaoke) ids = [vid('K', n)];
+    else if (n === 7) ids = [vid('L', n)]; // solo existe un audio de otra duracion
+    else if (n === 8) ids = [vid('N', n)]; // el unico audio no se puede incrustar
+    else if (n === 3) ids = [vid('V', n), vid('O', n), vid('Q', n)]; // dos buenos: sirve para el reintento
+    else ids = [vid('V', n), vid('O', n)];
+    return res.end(JSON.stringify({ items: ids.map((id) => ({ id: { videoId: id }, snippet: snippet(id) })) }));
   }
   if (u.pathname === '/videos') {
     pedidosApi.videos++;
     const ids = (u.searchParams.get('id') || '').split(',').filter(Boolean);
     return res.end(JSON.stringify({
-      items: ids.filter((id) => id[0] !== 'X').map((id) => ({
+      items: ids.map((id) => ({
         id,
-        snippet: { ...itemSnippet(id), liveBroadcastContent: 'none' },
-        contentDetails: { duration: 'PT3M31S' },
-        status: { embeddable: id !== NO_EMBEBIBLE, privacyStatus: 'public', uploadStatus: 'processed' },
+        snippet: { ...snippet(id), liveBroadcastContent: 'none' },
+        contentDetails: { duration: `PT${Math.floor(durDe(id) / 60)}M${durDe(id) % 60}S` },
+        status: { embeddable: id[0] !== 'N', privacyStatus: 'public', uploadStatus: 'processed' },
       })),
     }));
   }
@@ -67,19 +95,6 @@ const ytApi = createServer((req, res) => {
   res.end('{}');
 });
 await new Promise((r) => ytApi.listen(YT_PORT, r));
-
-// ---------------------------------------------------------------- lrclib falso
-const LRC = '[00:05.00] linea de prueba uno\n[00:10.00] linea de prueba dos\n';
-const lrclib = createServer((req, res) => {
-  const u = new URL(req.url, 'http://x');
-  res.setHeader('content-type', 'application/json');
-  if (u.pathname === '/api/search') {
-    return res.end(JSON.stringify(Array.from({ length: 60 }, (_, i) => ({ id: 9000 + i, trackName: `Tema ${i}`, artistName: `Artista ${i}`, duration: 211, syncedLyrics: LRC, instrumental: false }))));
-  }
-  res.statusCode = 404;
-  res.end('{}');
-});
-await new Promise((r) => lrclib.listen(LRC_PORT, r));
 
 // ------------------------------------------------------------------- utilidades
 let server = null;
@@ -94,7 +109,7 @@ const ENV = () => ({
   YOUTUBE_API_KEY: 'clave-de-prueba',
   YOUTUBE_API_BASE: `http://localhost:${YT_PORT}`,
   CACHE_AUDIO_DIR: CACHE,
-  ESCENARIO_CONFIG: JSON.stringify({ AUDIO_REQUERIDO: true, COUNTDOWN_S: 1, RESULT_MS: 1500, RESULT_INTERRUMPIDO_MS: 1500, LLAMADO_MS: 30000, AUDIO_ESPERA_MS: 20000 }),
+  ESCENARIO_CONFIG: JSON.stringify({ AUDIO_REQUERIDO: true, COUNTDOWN_S: 1, RESULT_MS: 1500, RESULT_INTERRUMPIDO_MS: 1500, LLAMADO_MS: 30000, AUDIO_ESPERA_MS: 25000 }),
 });
 async function arrancar() {
   server = spawn(process.execPath, [join(dir, '..', 'server.js')], { env: ENV(), stdio: ['ignore', 'pipe', 'pipe'] });
@@ -124,15 +139,19 @@ function pantalla({ autoLista = true } = {}) {
   s.on('estado', (e) => {
     s.estado = e;
     if (!autoLista) return;
-    for (const id of [e.actual?.cancion?.id, e.siguiente?.cancionId].filter(Boolean)) {
+    const quienes = [{ id: e.actual?.cancion?.id, videoId: e.actual?.cancion?.videoId }, { id: e.siguiente?.cancionId, videoId: e.siguiente?.cancion?.videoId }];
+    for (const c of quienes) {
+      const id = c.id;
+      if (!id) continue;
       const aud = id === e.actual?.cancion?.id ? e.actual.audio : e.siguiente?.audio;
       if (aud?.etapa === 'servidor') continue; // el server todavia no la tiene
-      if (s.errores.has(id)) { if (!s.listas.has(id)) { s.listas.add(id); s.emit('pantalla:audio', { cancionId: id, estado: 'error', motivo: s.errores.get(id) }); } continue; }
-      if (!s.listas.has(id)) { s.listas.add(id); s.emit('pantalla:audio', { cancionId: id, estado: 'lista' }); }
+      const clave = `${id}|${c.videoId || ''}`;
+      if (s.errores.has(c.videoId)) { if (!s.listas.has(clave)) { s.listas.add(clave); s.emit('pantalla:audio', { cancionId: id, estado: 'error', motivo: s.errores.get(c.videoId) }); } continue; }
+      if (!s.listas.has(clave)) { s.listas.add(clave); s.emit('pantalla:audio', { cancionId: id, estado: 'lista' }); }
     }
   });
-  s.on('audio:reintentar', ({ cancionId } = {}) => { s.listas.delete(cancionId); });
-  s.on('connect', () => { s.emit('pantalla:salud', { camara: true, mic: true, audio: true }); for (const id of s.listas) s.emit('pantalla:audio', { cancionId: id, estado: 'lista' }); });
+  s.on('audio:reintentar', () => { s.listas.clear(); });
+  s.on('connect', () => { s.emit('pantalla:salud', { camara: true, mic: true, audio: true }); });
   return s;
 }
 
@@ -141,35 +160,24 @@ try {
   const pan = pantalla();
   await hasta(() => pan.estado, 5000, 'estado pantalla');
 
-  console.log('\n== 1. Busqueda en YouTube: filtro karaoke, no reproducibles fuera, cache, paginacion, limite');
+  console.log('\n== 1. Busqueda: el catalogo sale de LRCLIB, todo con letra, sin gastar cuota de YouTube');
   const salud = await (await api('/healthz')).json();
   ok(salud.youtube?.configurada === true, `el server tiene la API de YouTube configurada (${JSON.stringify(salud.youtube)})`);
   const vacia = await (await api('/api/buscar?q=')).json();
   ok(vacia.items.length >= 6 && vacia.items.every((i) => i.fuente === 'local' && i.lista), 'consulta vacia = biblioteca local, lista para cantar ya');
-  const antes = { ...pedidosApi };
-  const b0 = await (await api('/api/buscar?q=artista')).json();
-  ok(b0.items.length >= 10, `"artista": ${b0.items.length} resultados`);
-  ok(b0.items.every((i) => i.fuente === 'youtube' && i.id === `yt-${i.videoId}` && i.thumbnail && i.canal && i.duracion === 211), 'cada resultado trae videoId, miniatura, canal y duracion');
-  ok(!b0.items.some((i) => i.videoId === NO_EMBEBIBLE), 'el video que no se puede incrustar se descarta (videos.list status.embeddable)');
-  const primeros = b0.items.slice(0, 5);
-  ok(primeros.every((i) => i.karaoke.esKaraoke), 'los karaoke salen primero');
-  const idxKaraokeUltimo = b0.items.map((i) => i.karaoke.esKaraoke).lastIndexOf(true);
-  const idxNoKaraokePrimero = b0.items.findIndex((i) => !i.karaoke.esKaraoke);
-  ok(idxNoKaraokePrimero === -1 || idxKaraokeUltimo < idxNoKaraokePrimero, 'orden: todos los karaoke antes que los que no lo son');
-  ok(typeof b0.nextPageToken === 'string' && b0.nextPageToken.length > 4, 'hay nextPageToken para pedir mas');
-  const b1 = await (await api(`/api/buscar?q=artista&pageToken=${encodeURIComponent(b0.nextPageToken)}`)).json();
-  ok(b1.items.length > 0, `pagina 2 con el token: ${b1.items.length} resultados`);
-  ok(new Set([...b0.items, ...b1.items].map((i) => i.videoId)).size === b0.items.length + b1.items.length, 'sin repetidos entre paginas');
-  const gastadas = pedidosApi.search - antes.search;
-  await api('/api/buscar?q=artista');
-  ok(pedidosApi.search - antes.search === gastadas, `la misma busqueda otra vez sale de la cache (no gasta cuota): ${gastadas} search.list en total`);
-  ok(b0.cuota?.usadas > 0 && b0.cuota.limite > 0, `la respuesta informa la cuota (${b0.cuota?.usadas}/${b0.cuota?.limite})`);
+  const b0 = await (await api('/api/buscar?q=tema')).json();
+  ok(b0.items.length === 15 && b0.items.every((i) => i.fuente === 'lrclib' && /^lr-\d+$/.test(i.id) && i.letra === true && i.artista && i.duracion === 211), `"tema": ${b0.items.length} canciones, todas de LRCLIB y todas con letra`);
+  ok(new Set(b0.items.map((i) => i.id)).size === 15, 'sin repetidos');
+  ok(pedidosApi.search === 0 && pedidosApi.videos === 0, 'buscar NO toca YouTube (la cuota se gasta recien al elegir)');
+  const lrAntes = pedidosLrclib.search;
+  await api('/api/buscar?q=tema');
+  ok(pedidosLrclib.search === lrAntes, 'la misma busqueda sale de la cache (no vuelve a pedir a LRCLIB)');
   let limitado = 0;
   for (let i = 0; i < 25; i++) if ((await api(`/api/buscar?q=ar${i}`)).status === 429) limitado++;
   ok(limitado > 0, `el limite de pedidos frena el abuso (${limitado} respuestas 429)`);
   await dormir(5200); // se vacia la ventana del limite
 
-  console.log('\n== 2. Elegir una cancion de YouTube: se guarda todo y NO se descarga audio');
+  console.log('\n== 2. Elegir la version ORIGINAL: el video que dura igual que la letra, a tiempo sin tocar nada');
   const A = celu('i3-celu-a-000000000001', 'Ana');
   const B = celu('i3-celu-b-000000000002', 'Beto');
   await conectado(A); await conectado(B);
@@ -179,24 +187,23 @@ try {
   ok((await B.pedir('turno:listo')).ok, 'Beto (biblioteca local) empieza y canta');
   await hasta(() => pan.estado?.etapa === 'PLAYING', 10000, 'PLAYING Beto');
   await A.pedir('fila:entrar', { nombre: 'Ana' });
-  const elegida = b0.items[0];
-  const r1 = await A.pedir('cancion:elegir', { cancionId: elegida.id, busqueda: 'artista' });
-  ok(r1.ok, 'Ana elige un resultado de YouTube mientras Beto canta');
+  const r1 = await A.pedir('cancion:elegir', { cancionId: 'lr-9001-o', busqueda: 'tema' });
+  ok(r1.ok, 'Ana elige "Tema 1" (version original) mientras Beto canta');
   await hasta(() => A.yo?.audio?.estado === 'lista', 20000, 'Ana lista');
-  ok(A.yo.audio.estado === 'lista', `su audio queda listo (la pantalla confirmo el reproductor): ${JSON.stringify(A.yo.audio)}`);
   const c = A.yo.cancion;
-  ok(c?.origen === 'youtube' && c.videoId === elegida.videoId, `guarda el videoId (${c?.videoId})`);
-  ok(c?.titulo === elegida.titulo && c?.canal === elegida.canal && c?.thumbnail === elegida.thumbnail && c?.duracion === 211, 'guarda titulo, canal, miniatura y duracion');
-  ok(c?.searchQuery === 'artista' && typeof c?.karaokeScore === 'number', `guarda la busqueda y el karaokeScore (${c?.searchQuery} / ${c?.karaokeScore})`);
-  ok(pan.estado.siguiente?.cancionId === elegida.id, 'la pantalla sabe que video preparar (siguiente.cancionId)');
+  ok(A.yo.audio.estado === 'lista', `su audio queda listo (la pantalla confirmo el reproductor): ${JSON.stringify(A.yo.audio)}`);
+  ok(c?.origen === 'youtube' && c.videoId === vid('O', 1), `eligio el AUDIO OFICIAL de 211 s (igual a la letra), no el "en vivo" de 230 s: ${c?.videoId}`);
+  ok(c?.titulo === 'Tema 1' && c?.artista === 'Artista 1' && c?.canal === 'Canal Oficial' && c?.thumbnail && c?.duracion === 211, 'guarda titulo y artista de LRCLIB + canal, miniatura y duracion del video');
+  ok(c?.searchQuery === 'tema' && c?.tipo === 'original', `guarda la busqueda y la version (${c?.searchQuery} / ${c?.tipo})`);
+  ok(pedidosApi.search === 1, `una sola busqueda en YouTube (${pedidosApi.search}) porque la primera ya dio un audio exacto`);
   ok((await A.pedir('turno:listo')).ok === false, 'Ana no puede arrancar hasta que le toque');
-  const m = await (await api(`/api/cancion/${elegida.id}`)).json();
-  ok(m.origen === 'youtube' && m.videoId === elegida.videoId && !m.audio, 'GET /api/cancion/:id da el videoId y NINGUNA url de audio (se reproduce embebido)');
-  await dormir(1500); // la letra de lrclib es opcional y llega en segundo plano
-  const m2 = await (await api(`/api/cancion/${elegida.id}`)).json();
-  ok(m2.lrc === `/cache-audio/${elegida.id}.lrc` && (await (await api(m2.lrc)).text()).includes('linea de prueba'), 'la letra sincronizada de lrclib se suma sola (opcional)');
+  const m = await (await api('/api/cancion/lr-9001-o')).json();
+  ok(m.origen === 'youtube' && m.videoId === vid('O', 1) && !m.audio, 'GET /api/cancion/:id da el videoId y NINGUNA url de audio (se reproduce embebido)');
+  ok(m.letraConfiable === true && m.letraNivel === 'exacta' && m.offsetLetra === 0, `la letra es CONFIABLE (nivel ${m.letraNivel}): no hay que alinear nada`);
+  const lrcTxt = await (await api(m.lrc)).text();
+  ok(lrcTxt.includes('linea de prueba uno'), 'y la letra sincronizada de LRCLIB ya esta lista desde el principio');
   const archivos = await readdir(CACHE).catch(() => []);
-  ok(archivos.every((f) => f.endsWith('.lrc')), `en la cache solo hay letras, ningun audio/video descargado (${archivos.join(', ') || 'vacia'})`);
+  ok(!archivos.some((f) => /\.(m4a|mp3|mp4|webm|opus|ogg|wav)$/i.test(f)), `ningun audio/video descargado (${archivos.join(', ')})`);
 
   console.log('\n== 3. Cola continua: Beto termina -> resultado -> Ana arranca (sin STANDBY, video ya listo)');
   await B.pedir('cantante:terminar');
@@ -205,9 +212,9 @@ try {
   ok(!visteStandby && A.yo?.audio?.estado === 'lista', 'Ana llamada con todo listo');
   ok((await A.pedir('turno:listo')).ok, 'Ana toca LISTO');
   await hasta(() => pan.estado?.etapa === 'PLAYING', 10000, 'PLAYING Ana');
-  ok(pan.estado.actual?.cancion?.videoId === elegida.videoId, 'la pantalla recibe el videoId de lo que suena');
+  ok(pan.estado.actual?.cancion?.videoId === vid('O', 1), 'la pantalla recibe el videoId de lo que suena');
 
-  console.log('\n== 3b. Letra a tiempo: el que canta la alinea con la voz y el ajuste queda guardado');
+  console.log('\n== 3b. Letra a tiempo en vivo (opcional): el que canta la alinea y el ajuste queda guardado');
   const rAl = await A.pedir('letra:sincronizar', { accion: 'alinear' });
   const rAj = await A.pedir('letra:sincronizar', { accion: 'ajustar', delta: 0.5 });
   const rPub = await B.pedir('letra:sincronizar', { accion: 'alinear' });
@@ -215,13 +222,12 @@ try {
   ok(rAl.ok && rAj.ok, 'quien canta puede alinear y ajustar');
   ok(pan.syncs.length === 2 && pan.syncs[0].accion === 'alinear' && pan.syncs[1].delta === 0.5, `la pantalla recibe las dos ordenes (${JSON.stringify(pan.syncs)})`);
   ok(rPub.ok === false && pan.syncs.length === 2, 'el publico NO puede mover la letra');
-  pan.emit('pantalla:offset', { cancionId: elegida.id, offset: 12.04 });
+  pan.emit('pantalla:offset', { cancionId: 'lr-9001-o', offset: 1.04 });
   await dormir(600);
-  const mOff = await (await api(`/api/cancion/${elegida.id}`)).json();
-  ok(mOff.offsetLetra === 12, `el desfase queda guardado para esa cancion (offsetLetra ${mOff.offsetLetra})`);
-  const { readFile } = await import('node:fs/promises');
+  const mOff = await (await api('/api/cancion/lr-9001-o')).json();
+  ok(mOff.offsetLetra === 1, `el desfase queda guardado para esa cancion (offsetLetra ${mOff.offsetLetra})`);
   const guardado = JSON.parse(await readFile(join(CACHE, 'offsets.json'), 'utf8').catch(() => '{}'));
-  ok(guardado[elegida.id] === 12, 'y en disco, para que sobreviva a un reinicio');
+  ok(guardado['lr-9001-o'] === 1, 'y en disco, para que sobreviva a un reinicio');
 
   console.log('\n== 4. El reproductor falla en plena performance: se cierra, no se canta en silencio');
   pan.emit('pantalla:audioFallo', { motivo: 'el navegador no deja sonar YouTube' });
@@ -230,40 +236,59 @@ try {
   ok(res?.interrumpida && /audio|YouTube/i.test(res.motivo), `resultado interrumpido: "${res?.motivo}"`);
   await hasta(() => pan.estado?.etapa === 'STANDBY', 8000, 'STANDBY');
 
-  console.log('\n== 5. Videos que no se pueden reproducir y clave invalida: error visible con motivo');
+  console.log('\n== 5. Version KARAOKE: se elige el karaoke, pero NO se promete letra a tiempo');
   const C = celu('i3-celu-c-000000000003', 'Cami');
   await conectado(C);
   await C.pedir('fila:entrar', { nombre: 'Cami' });
-  const rn = await C.pedir('cancion:elegir', { cancionId: `yt-${NO_EMBEBIBLE}`, busqueda: 'artista' });
-  ok(rn.ok === false && /fuera de YouTube|No se pudo/.test(rn.error || ''), `video con incrustacion deshabilitada -> "${rn.error}"`);
-  const rx = await C.pedir('cancion:elegir', { cancionId: `yt-${vid('X', 1)}` });
-  ok(rx.ok === false, `video borrado/privado -> "${rx.error}"`);
-  ok(C.yo.cancionId == null, 'no queda ninguna cancion elegida');
-  // el navegador de la pantalla no puede cargar ESE video (p. ej. error 150 de YouTube): LISTO bloqueado + reintento
-  const bueno = b0.items[1];
-  pan.errores.set(bueno.id, 'el dueño del video no permite reproducirlo fuera de YouTube');
-  await C.pedir('cancion:elegir', { cancionId: bueno.id, busqueda: 'artista' });
+  const antesK = pedidosApi.search;
+  ok((await C.pedir('cancion:elegir', { cancionId: 'lr-9002-k', busqueda: 'tema 2' })).ok, 'Cami elige "Tema 2" en version karaoke');
+  await hasta(() => C.yo?.audio?.estado === 'lista', 20000, 'karaoke lista');
+  const mk = await (await api('/api/cancion/lr-9002-k')).json();
+  ok(mk.videoId === vid('K', 2) && mk.tipo === 'karaoke', `el video es el karaoke (${mk.videoId})`);
+  ok(mk.letraConfiable === false && mk.lrc, 'tiene letra de LRCLIB pero NO es confiable: la pantalla avisa y se puede alinear');
+  ok(pedidosApi.search - antesK === 1, 'una busqueda en YouTube');
+  await C.pedir('fila:salir');
+
+  console.log('\n== 6. Sin version que sirva y videos que fallan: error claro, reintento con el siguiente');
+  await C.pedir('fila:entrar', { nombre: 'Cami' });
+  const sinOrig = await C.pedir('cancion:elegir', { cancionId: 'lr-9007-o' });
+  ok(sinOrig.ok === false && /karaoke/i.test(sinOrig.error), `audio de otra duracion: "${sinOrig.error}"`);
+  const noEmb = await C.pedir('cancion:elegir', { cancionId: 'lr-9008-o' });
+  ok(noEmb.ok === false && /karaoke/i.test(noEmb.error), `el unico audio no se puede incrustar: "${noEmb.error}"`);
+  await dormir(300);
+  ok(C.yo.cancionId === 'lr-9002-k', `los intentos fallidos no pisan la eleccion anterior (${C.yo.cancionId})`);
+  ok((await C.pedir('cancion:elegir', { cancionId: 'lr-9007-k' })).ok, 'pero la version karaoke de esa misma cancion si se puede');
+  await C.pedir('cancion:elegir', { cancionId: 'corre' });
+  // el navegador de la pantalla no puede cargar ESE video (p. ej. error 150 de YouTube): LISTO bloqueado + reintento con otro
+  ok((await C.pedir('cancion:elegir', { cancionId: 'lr-9003-o', busqueda: 'tema 3' })).ok, 'Cami elige "Tema 3" (original)');
+  await hasta(() => C.yo?.audio?.estado === 'lista' || C.yo?.audio?.estado === 'preparando', 20000, 'Tema 3 elegido');
+  const primerVideo = (await (await api('/api/cancion/lr-9003-o')).json()).videoId;
+  pan.errores.set(primerVideo, 'el dueño del video no permite reproducirlo fuera de YouTube');
+  pan.listas.clear();
+  await C.pedir('cancion:elegir', { cancionId: 'corre' });
+  await C.pedir('cancion:elegir', { cancionId: 'lr-9003-o', busqueda: 'tema 3' });
   await hasta(() => C.yo?.audio?.estado === 'error', 20000, 'error de la pantalla');
   ok(C.yo.audio.estado === 'error' && /fuera de YouTube/.test(C.yo.audio.motivo), `la pantalla no pudo cargarlo -> "${C.yo.audio.motivo}"`);
   const rl = await C.pedir('turno:listo');
   ok(rl.ok === false && /No se pudo preparar/.test(rl.error), `LISTO rechazado con el motivo (${rl.error})`);
-  pan.errores.delete(bueno.id);
   await C.pedir('audio:reintentar');
-  await hasta(() => C.yo?.audio?.estado === 'lista', 20000, 'reintento ok');
-  ok(C.yo.audio.estado === 'lista', 'el reintento funciona cuando el video se puede cargar');
+  await hasta(() => C.yo?.audio?.estado === 'lista', 25000, 'reintento ok');
+  const segundoVideo = (await (await api('/api/cancion/lr-9003-o')).json()).videoId;
+  ok(C.yo.audio.estado === 'lista' && segundoVideo !== primerVideo, `el reintento descarta el video que fallo y elige otro (${primerVideo} -> ${segundoVideo})`);
   await C.pedir('cancion:elegir', { cancionId: 'corre' });
   await hasta(() => C.yo?.cancionId === 'corre' && C.yo?.audio?.estado === 'lista', 15000, 'cambio a corre');
   ok(C.yo.audio.estado === 'lista' && C.yo.cancion.titulo === 'Corre', 'cambiar de cancion mientras espera: se prepara la nueva');
   await C.pedir('fila:salir');
   modoApi = 'clave';
-  const bc = await api('/api/buscar?q=clavemala');
-  const jc = await bc.json();
-  ok(bc.status === 200 && jc.error?.codigo === 'clave_invalida' && /clave/i.test(jc.error.mensaje), `clave invalida -> error claro para el celu ("${jc.error?.mensaje}")`);
-  const jl = await (await api('/api/buscar?q=corre')).json();
-  ok(jl.items.some((i) => i.fuente === 'local'), 'aun con la API caida se ven las canciones locales que coinciden');
+  const bc = await (await api('/api/buscar?q=tema')).json();
+  ok(bc.items.length > 0 && !bc.error, 'la busqueda sigue andando aunque YouTube tenga problemas (sale de LRCLIB)');
+  await C.pedir('fila:entrar', { nombre: 'Cami' });
+  const rc = await C.pedir('cancion:elegir', { cancionId: 'lr-9010-o' });
+  ok(rc.ok === false && /clave/i.test(rc.error), `clave invalida al elegir -> mensaje claro: "${rc.error}"`);
+  await C.pedir('fila:salir');
   modoApi = 'ok';
 
-  console.log('\n== 6. Sin pantalla conectada no hay video "listo" (nada puede sonar)');
+  console.log('\n== 7. Sin pantalla conectada no hay video "listo" (nada puede sonar)');
   const sinPantalla = pantalla({ autoLista: false });
   pan.close();
   await dormir(400);
@@ -272,12 +297,12 @@ try {
   sinPantalla.close();
   await hasta(async () => !(await (await api('/healthz')).json()).pantalla.conectada, 5000, 'sin pantalla');
   await sp.pedir('fila:entrar', { nombre: 'Dani' });
-  await sp.pedir('cancion:elegir', { cancionId: b0.items[2].id, busqueda: 'artista' });
+  await sp.pedir('cancion:elegir', { cancionId: 'lr-9004-o', busqueda: 'tema 4' });
   await dormir(1500);
   ok(sp.yo.audio.estado === 'preparando', `sin pantalla: "${sp.yo.audio.estado}" (etapa ${sp.yo.audio.etapa})`);
   ok((await sp.pedir('turno:listo')).ok === false, 'y LISTO sigue bloqueado');
 
-  console.log('\n== 7. REINICIO del server con una cancion de YouTube en la fila');
+  console.log('\n== 8. REINICIO del server con una cancion en la fila: no vuelve a gastar cuota de YouTube');
   const pan2 = pantalla();
   await hasta(() => pan2.estado, 5000, 'pantalla 2');
   await sp.pedir('fila:salir');
@@ -291,34 +316,41 @@ try {
   await hasta(() => pan2.estado?.etapa === 'PLAYING', 10000, 'Fede canta');
   await conectado(E);
   await E.pedir('fila:entrar', { nombre: 'Eli' });
-  const deEli = b0.items[3];
-  await E.pedir('cancion:elegir', { cancionId: deEli.id, busqueda: 'artista' });
+  await E.pedir('cancion:elegir', { cancionId: 'lr-9005-o', busqueda: 'tema 5' });
   await hasta(() => E.yo?.audio?.estado === 'lista', 30000, 'Eli lista');
-  ok(E.yo.audio.estado === 'lista' && E.yo.estado === 'QUEUED', 'Eli espera con su cancion de YouTube ya lista');
-  E.memoria.intencion = { enFila: true, cancionId: E.yo.cancionId, modo: E.yo.modo, busqueda: 'artista' }; // lo que guarda el celu en localStorage
+  ok(E.yo.audio.estado === 'lista' && E.yo.estado === 'QUEUED', 'Eli espera con su cancion ya lista');
+  const videoEli = E.yo.cancion.videoId;
+  E.memoria.intencion = { enFila: true, cancionId: E.yo.cancionId, modo: E.yo.modo, busqueda: 'tema 5' }; // lo que guarda el celu en localStorage
+  await dormir(700); // que el server alcance a guardar la eleccion en disco
+  const apiAntes = pedidosApi.search;
 
   await parar();
   await dormir(500);
   await arrancar();
-  ok(await hasta(() => E.connected && ['QUEUED', 'CALLED'].includes(E.yo?.estado) && E.yo?.cancionId === deEli.id, 20000, 'Eli reconecta'), 'tras reiniciar, Eli reconecta sola y sigue con su cancion de YouTube (se vuelve a verificar con la API)');
-  ok(E.yo?.cancion?.videoId === deEli.videoId, 'con el mismo videoId');
+  ok(await hasta(() => E.connected && ['QUEUED', 'CALLED'].includes(E.yo?.estado) && E.yo?.cancionId === 'lr-9005-o', 20000, 'Eli reconecta'), 'tras reiniciar, Eli reconecta sola y sigue con su cancion');
+  ok(await hasta(() => E.yo?.cancion?.videoId === videoEli, 10000, 'mismo video'), 'con el MISMO video');
   ok(await hasta(() => pan2.connected && pan2.estado?.etapa, 20000, 'pantalla reconecta'), 'la pantalla reconecta');
   ok(await hasta(() => E.yo?.audio?.estado === 'lista', 40000, 'audio de Eli otra vez'), `y vuelve a quedar lista (${JSON.stringify(E.yo?.audio)})`);
-  ok((await E.pedir('turno:listo')).ok === true, 'LISTO funciona (es la primera: el escenario esta libre)');
+  ok(pedidosApi.search === apiAntes, `sin gastar ni una busqueda mas de YouTube (la eleccion se recordaba en disco: ${pedidosApi.search} = ${apiAntes})`);
+  const rE = await E.pedir('turno:listo');
+  ok(rE.ok === true, `LISTO funciona (es la primera: el escenario esta libre) ${JSON.stringify(rE)} estado ${E.yo?.estado} etapa ${pan2.estado?.etapa}`);
   await hasta(() => pan2.estado?.etapa === 'PLAYING', 15000, 'PLAYING tras reinicio');
-  ok(pan2.estado?.etapa === 'PLAYING' && pan2.estado.actual.cancion.videoId === deEli.videoId, 'arranca el video despues del reinicio');
+  ok(pan2.estado?.etapa === 'PLAYING' && pan2.estado.actual.cancion.videoId === videoEli, 'arranca el video despues del reinicio');
 
-  console.log('\n== 8. Cuota diaria agotada: mensaje claro, lo local sigue, no se cuelga');
+  console.log('\n== 9. Cuota diaria agotada: mensaje claro, la busqueda y lo local siguen, no se cuelga');
   modoApi = 'cuota';
-  const bq = await (await api('/api/buscar?q=cuotanueva')).json();
-  ok(bq.error?.codigo === 'cuota_agotada' && /cuota/i.test(bq.error.mensaje) && bq.items.length === 0, `"${bq.error?.mensaje}"`);
+  const G = celu('i3-celu-g-000000000007', 'Gus');
+  await conectado(G);
+  await G.pedir('fila:entrar', { nombre: 'Gus' });
+  const rq = await G.pedir('cancion:elegir', { cancionId: 'lr-9011-o', busqueda: 'tema 11' });
+  ok(rq.ok === false && /cuota/i.test(rq.error), `"${rq.error}"`);
   modoApi = 'ok';
-  const bq2 = await (await api('/api/buscar?q=otranueva')).json();
-  ok(bq2.error?.codigo === 'cuota_agotada' && bq2.items.length === 0, 'una vez agotada, el server ni insiste (no gasta pedidos inutiles)');
+  const bq = await (await api('/api/buscar?q=tema 12')).json();
+  ok(bq.items.some((i) => i.fuente === 'lrclib') && !bq.error, 'la busqueda (LRCLIB) sigue funcionando');
   const bl = await (await api('/api/buscar?q=corre')).json();
   ok(bl.items.some((i) => i.fuente === 'local' && i.lista), 'las canciones de la biblioteca local siguen disponibles');
 
-  for (const x of [A, B, C, E, F, sp, pan2]) x.close();
+  for (const x of [A, B, C, E, F, G, sp, pan2]) x.close();
 } catch (e) {
   console.error('ERROR en la prueba:', e);
   fallos++;

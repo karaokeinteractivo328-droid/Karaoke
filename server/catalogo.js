@@ -1,26 +1,24 @@
 // Catalogo + busqueda de canciones.
 //
-//   FUENTE DE LAS CANCIONES: YouTube Data API v3 (ver youtube.js). Se BUSCA con la API oficial y
-//   se REPRODUCE con el reproductor embebido de YouTube (IFrame API) en la pantalla. NO se
-//   descarga ni se extrae audio/video de YouTube: la referencia de la cancion es su `videoId`.
+//   El CATALOGO sale de LRCLIB (lrclib.net): solo aparecen temas con LETRA SINCRONIZADA, asi que toda
+//   cancion que se puede elegir tiene letra. Al elegirla (id "lr-<id de lrclib>-o|k") el server busca en
+//   YouTube (Data API v3) el video que mejor calza con esa letra (ver seleccion.js):
+//     o = audio ORIGINAL del tema: la letra cae a tiempo sola (mismo master que uso lrclib)
+//     k = KARAOKE sin voz: la letra puede salir corrida (se avisa y se puede alinear)
+//   Se REPRODUCE con el reproductor embebido de YouTube en la pantalla. NO se descarga ni se extrae
+//   audio/video de YouTube: la referencia de la cancion es su `videoId`.
 //
-//   Los resultados se puntuan para quedarse con versiones aptas para KARAOKE (karaoke.js).
-//
-//   Ademas hay una BIBLIOTECA LOCAL (server/canciones, o Supabase Storage): son las canciones que
-//   suenan sin Internet y sin clave de YouTube. Se reproducen con un <audio> normal.
-//
-//   La LETRA sincronizada (opcional) se busca en lrclib.net por titulo/artista del video. Muchos
-//   videos de karaoke ya traen la letra dentro del video: si lrclib no la tiene, la pantalla
-//   muestra el video mas grande.
+//   Ademas hay una BIBLIOTECA LOCAL (server/canciones, o Supabase Storage): suena sin Internet ni
+//   clave de YouTube, con un <audio> normal.
 
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { puntuarKaraoke } from './karaoke.js';
 import { normalizar } from './texto.js';
 import { normalizarOffset } from './offsets.js';
-import { YouTubeError, esVideoId } from './youtube.js';
+import { YouTubeError } from './youtube.js';
+import { agruparTemas, consultasDe, elegirVideo, mejorVariante, mismoTema, tituloLimpio } from './seleccion.js';
 
 export { normalizar };
 const LRCLIB_POR_DEFECTO = 'https://lrclib.net/api';
@@ -37,7 +35,7 @@ export function separarArtistaTema(tituloVideo) {
 }
 
 export function crearCatalogo({
-  canciones, // array VIVO que comparte con el escenario (se le agregan las canciones de YouTube elegidas)
+  canciones, // array VIVO que comparte con el escenario (se le agregan las canciones elegidas)
   dirLocal, // server/ (para resolver /canciones/...)
   dirCache, // server/cache-audio (solo guarda letras .lrc)
   ffmpeg = 'ffmpeg',
@@ -46,19 +44,15 @@ export function crearCatalogo({
   ejecutar, // (cmd, args, {timeout}) -> {stdout, stderr}   (se inyecta en tests)
   onEstadoAudio = () => {},
   offsets, // offsets.js: desfase de la letra guardado por cancion (opcional)
+  elecciones, // almacen.js: que video se eligio para cada cancion (evita gastar cuota tras un reinicio)
   log = () => {},
   config = {},
 } = {}) {
   const C = {
     POR_PAGINA_LOCAL: 12,
     TIMEOUT_LRCLIB_MS: 6_000,
-    TOLERANCIA_SINCRONIA_S: 3, // video y letra duran casi igual: la letra de lrclib cae con el video (medido en videos reales)
-    MAX_SINCRONIA: 12, // a cuantos resultados se les consulta la letra al buscar
-    ESPERA_SINCRONIA_MS: 4_000, // cuanto se espera esa consulta antes de mostrar los resultados
     CACHE_LRCLIB_MS: 6 * 3600_000,
-    ESPERA_LETRA_MS: 12_000, // cuanto se espera la letra antes de dar la cancion por lista
-    TOLERANCIA_LETRA_S: 25, // diferencia de duracion en la que la letra se da por buena
-    TOLERANCIA_LETRA_AMPLIA_S: 90, // mas alla de esto no se usa; entre ambas se usa igual (la version karaoke suele tener intro/final extra)
+    MAX_TEMAS: 15, // temas distintos por busqueda
     LRCLIB: process.env.LRCLIB_URL || LRCLIB_POR_DEFECTO,
     ...config,
   };
@@ -90,75 +84,34 @@ export function crearCatalogo({
     thumbnail: null, fuente: 'local', lista: true, karaoke: { esKaraoke: true, score: null, motivos: ['biblioteca'] },
   });
 
-  // Una pagina de resultados. `pageToken` es el nextPageToken opaco de la pagina anterior.
-  //   Primera pagina: biblioteca local que coincide + YouTube.  Siguientes: solo YouTube.
+  const itemLrclib = (t) => ({
+    id: `lr-${t.id}`, titulo: t.titulo, artista: t.artista, canal: t.artista, duracion: t.duracion,
+    thumbnail: null, fuente: 'lrclib', lista: false, letra: true, karaoke: null,
+  });
+
+  // Resultados de una consulta: la biblioteca local + los temas de LRCLIB (todos con letra sincronizada).
+  // No cuesta nada de cuota de YouTube: eso recien pasa al ELEGIR una cancion.
   async function buscar(q = '', pageToken = null) {
     const consulta = String(q || '').trim().slice(0, 100);
-    const primera = !pageToken;
-    const loc = primera ? locales().filter((c) => coincideLocal(c, consulta)).slice(0, C.POR_PAGINA_LOCAL).map(itemLocal) : [];
+    const loc = !pageToken ? locales().filter((c) => coincideLocal(c, consulta)).slice(0, C.POR_PAGINA_LOCAL).map(itemLocal) : [];
     const salida = { q: consulta, items: loc, nextPageToken: null, remoto: !!youtube?.configurada, error: null, cuota: youtube?.cuota?.() || null };
-    if (consulta.length < 2 && !pageToken) return salida; // vacia = biblioteca local
-    if (!youtube) return salida;
+    if (pageToken || consulta.length < 2) return salida; // vacia = biblioteca local
+    if (!youtube?.configurada) {
+      salida.error = { codigo: 'sin_clave', mensaje: 'La búsqueda de YouTube no está configurada en este equipo.' };
+      return salida;
+    }
     try {
-      const r = await youtube.buscar(consulta, pageToken);
-      const nombres = new Set(loc.map((x) => `${normalizar(x.artista)}|${normalizar(x.titulo)}`));
-      const yt = r.items.filter((x) => !nombres.has(`${normalizar(x.canal)}|${normalizar(x.titulo)}`));
-      await enriquecerSincronia(yt);
-      // karaoke primero y, dentro de eso, los de letra sincronizada (orden estable para el resto)
-      yt.sort((a, b) => (b.karaoke?.esKaraoke ? 1 : 0) - (a.karaoke?.esKaraoke ? 1 : 0) || (b.karaoke?.score ?? 0) + bonoSincronia(b) - ((a.karaoke?.score ?? 0) + bonoSincronia(a)));
-      salida.items = [...loc, ...yt];
-      salida.nextPageToken = r.nextPageToken;
-      salida.cuota = r.cuota;
+      const temas = agruparTemas(await lrclib(`/search?q=${encodeURIComponent(consulta)}`), { max: C.MAX_TEMAS });
+      // la biblioteca local ya tiene esos temas (y suenan sin Internet): no se repiten
+      salida.items = [...loc, ...temas.filter((t) => !loc.some((x) => mismoTema(x.artista, x.titulo, t.artista, t.titulo))).map(itemLrclib)];
     } catch (e) {
-      const mensajes = { sin_clave: 'La búsqueda de YouTube no está configurada en este equipo.', red: 'No se pudo conectar con YouTube.' };
-      salida.error = { codigo: e.codigo || 'desconocido', mensaje: e instanceof YouTubeError ? e.message : mensajes[e.codigo] || 'No se pudo buscar en YouTube.' };
-      log(`[catalogo] busqueda fallo (${salida.error.codigo}): ${e.message}`);
+      salida.error = { codigo: 'lrclib', mensaje: 'No se pudo consultar el catálogo de letras. Probá de nuevo.' };
+      log(`[catalogo] busqueda fallo (lrclib): ${e.message}`);
     }
     return salida;
   }
 
-  // ---------------------------------------------------------------- resolver
-  // De un id ("yt-<videoId>" o una cancion local) a una cancion registrada en el escenario.
-  // Para YouTube se VERIFICA con la API (embebible, publico, sin restriccion) antes de aceptarla.
-  const registrando = new Map();
-  async function resolver(id, { busqueda = '' } = {}) {
-    if (!/^[A-Za-z0-9_-]{1,60}$/.test(id || '')) throw new Error('id invalido');
-    const ya = canciones.find((c) => c.id === id);
-    if (ya) return { ...ya };
-    const m = /^yt-([A-Za-z0-9_-]{11})$/.exec(id);
-    if (!m || !esVideoId(m[1])) throw new Error('cancion desconocida');
-    if (!youtube?.configurada) throw new Error('la búsqueda de YouTube no está configurada');
-    if (registrando.has(id)) return registrando.get(id);
-    const p = (async () => {
-      const d = await youtube.detalle(m[1]); // lanza si no se puede reproducir
-      const karaoke = puntuarKaraoke(d, busqueda || d.titulo);
-      const meta = {
-        id,
-        origen: 'youtube',
-        videoId: d.videoId,
-        titulo: d.titulo,
-        artista: d.canal,
-        canal: d.canal,
-        thumbnail: d.thumbnail,
-        duracion: d.duracion,
-        voces: 'solo',
-        // lo que se guarda de la eleccion (ademas del videoId): con que consulta se la encontro y cuan karaoke es
-        searchQuery: String(busqueda || '').slice(0, 100),
-        karaokeScore: karaoke.score,
-        esKaraoke: karaoke.esKaraoke,
-        lrc: null,
-        offsetLetra: offsets?.get(id) ?? 0, // lo que ajusto alguien la ultima vez que se canto
-      };
-      canciones.push(meta);
-      log(`[SONG] registrada ${id}: "${meta.titulo}" (${meta.canal}, ${meta.duracion}s, karaoke ${meta.karaokeScore})`);
-      asegurarLetra(meta); // en segundo plano: no frena la eleccion
-      return { ...meta };
-    })().finally(() => registrando.delete(id));
-    registrando.set(id, p);
-    return p;
-  }
-
-  // ------------------------------------------------------------------- letra
+  // ------------------------------------------------------------------- lrclib
   const cacheLrclib = new Map(); // ruta -> { t, datos } | { promesa }
   async function lrclib(ruta) {
     const hit = cacheLrclib.get(ruta);
@@ -187,94 +140,103 @@ export function crearCatalogo({
     }
   }
 
-  // Mejor letra sincronizada de lrclib para un video (o null). Se prueba de lo mas preciso
-  // (artista + tema) a lo mas amplio. El titulo del video es desordenado ("TEMA - ARTISTA | KARAOKE",
-  // "ARTISTA - TEMA (Karaoke Version)"), asi que se compara por PALABRAS sin importar el orden.
-  // Gana la de duracion mas cercana al video (y, a igualdad, la del mismo artista): lrclib tiene
-  // varias versiones del mismo tema con tiempos muy distintos (p. ej. 10 s vs 42 s para la 1ra linea).
-  const palabras = (t) => normalizar(t).split(' ').filter((w) => w.length > 1);
-  async function elegirLetra(titulo, duracion) {
-    const { artista, tema } = separarArtistaTema(titulo);
-    const consulta = `${artista} ${tema}`.trim();
-    if (consulta.length < 3) return null;
-    const rutas = [];
-    if (artista && tema) rutas.push(`/search?track_name=${encodeURIComponent(tema)}&artist_name=${encodeURIComponent(artista)}`);
-    rutas.push(`/search?q=${encodeURIComponent(consulta)}`);
-    if (artista) rutas.push(`/search?q=${encodeURIComponent(tema)}`);
-    const buscadas = palabras(consulta);
-    const nArtista = palabras(artista)[0] || '';
-    const puntuar = (r) => {
-      if (!r.syncedLyrics || r.instrumental) return null;
-      const nombre = new Set(palabras(`${r.artistName || ''} ${r.trackName || r.name || ''}`));
-      const halladas = buscadas.filter((w) => nombre.has(w)).length;
-      if (!buscadas.length || halladas / buscadas.length < 0.6) return null; // no es el mismo tema
-      const dif = Math.abs(Number(r.duration) - Number(duracion));
-      if (!(dif <= C.TOLERANCIA_LETRA_AMPLIA_S)) return null;
-      const mismoArtista = !!nArtista && palabras(r.artistName).includes(nArtista);
-      return { r, dif, mismoArtista, orden: dif - (mismoArtista ? 5 : 0) + (dif > C.TOLERANCIA_LETRA_S ? 1000 : 0) };
-    };
+  // El tema de lrclib con TODAS sus versiones sincronizadas (cada una con su duracion)
+  async function temaDe(lrId) {
+    const t = await lrclib(`/get/${lrId}`);
+    if (!t?.syncedLyrics) throw new YouTubeError('sin_letra', 'Esa canción ya no tiene letra sincronizada.');
+    const titulo = tituloLimpio(t.trackName || t.name);
+    const artista = String(t.artistName || '').trim();
+    let variantes = [];
+    try {
+      const crudo = await lrclib(`/search?q=${encodeURIComponent(`${artista} ${titulo}`.trim())}`);
+      const g = agruparTemas([t, ...(Array.isArray(crudo) ? crudo : [])], { max: 200 }).find((x) => x.variantes.some((v) => v.id === t.id));
+      variantes = g?.variantes || [];
+    } catch {
+      // sin las demas versiones igual se puede: queda la que se eligio
+    }
+    if (!variantes.some((v) => v.id === t.id)) variantes.push({ id: t.id, duracion: Number(t.duration), syncedLyrics: t.syncedLyrics });
+    return { id: t.id, artista, titulo, duracion: Math.round(Number(t.duration)), variantes };
+  }
+
+  // ------------------------------------------------------------ elegir el video
+  // Busca en YouTube el video que mejor calza con la letra (ver seleccion.js) y lo recuerda.
+  async function buscarVideoPara(tema, tipo, malos = []) {
     let mejor = null;
-    for (const ruta of rutas) {
-      let crudo;
-      try { crudo = await lrclib(ruta); } catch (e) { log(`[letra] lrclib fallo (${e.message})`); continue; }
-      const candidatos = (Array.isArray(crudo) ? crudo : []).map(puntuar).filter(Boolean).sort((x, y) => x.orden - y.orden);
-      if (candidatos.length && (!mejor || candidatos[0].orden < mejor.orden)) mejor = candidatos[0];
-      if (mejor && mejor.dif <= C.TOLERANCIA_SINCRONIA_S) break; // ya hay una que calza
+    for (const q of consultasDe(tema, tipo)) {
+      const r = tipo === 'karaoke' ? await youtube.buscar(q) : await youtube.candidatos(q);
+      const e = elegirVideo((r.items || []).filter((v) => !malos.includes(v.videoId)), tema, tipo);
+      if (e && (!mejor || e.p.score > mejor.p.score)) mejor = e;
+      if (mejor && (tipo === 'karaoke' || mejor.p.nivel === 'exacta')) break; // el original se sigue buscando hasta dar con uno exacto
     }
-    return mejor;
-  }
-
-  // Letra sincronizada para el video elegido (mejor esfuerzo). Hasta TOLERANCIA_LETRA_AMPLIA_S de
-  // diferencia de duracion se guarda igual, pero solo se la considera CONFIABLE (se dibuja la letra
-  // de la app) si dura casi igual que el video (nivel "alta") o si alguien ya la alineo a mano.
-  async function buscarLetra(meta) {
-    const mejor = await elegirLetra(meta.titulo, meta.duracion);
     if (!mejor) {
-      meta.letraEstado = 'sin_letra';
-      log(`[letra] ${meta.id}: sin letra sincronizada compatible (el video trae la suya)`);
-      return null;
+      throw new YouTubeError('sin_version', tipo === 'original'
+        ? 'No encontramos el audio original de esta canción con la duración de la letra. Probá la versión karaoke.'
+        : 'No encontramos un karaoke reproducible para esta canción. Probá la versión original.');
     }
+    const { video: v, p } = mejor;
+    return {
+      videoId: v.videoId, titulo: v.titulo, canal: v.canal, thumbnail: v.thumbnail, duracion: v.duracion,
+      varianteId: p.variante.id, nivel: p.nivel, dif: Math.round(p.dif * 10) / 10, confiable: !!p.confiable,
+      karaokeScore: p.karaoke?.score ?? null, esKaraoke: !!p.esKaraoke,
+    };
+  }
+
+  // videos que ya fallaron para una cancion (en memoria y, si hay almacen, tambien en disco)
+  const malosMem = new Map();
+  const malosDe = (id) => [...new Set([...(malosMem.get(id) || []), ...(elecciones?.get(`${id}_malos`) || [])])];
+
+  // ---------------------------------------------------------------- resolver
+  // De un id ("lr-<id lrclib>-o|k" o una cancion local) a una cancion registrada en el escenario.
+  const registrando = new Map();
+  const ID_LR = /^lr-(\d{1,10})-([ok])$/;
+  async function resolver(id, { busqueda = '' } = {}) {
+    if (!/^[A-Za-z0-9_-]{1,60}$/.test(id || '')) throw new Error('id invalido');
+    const ya = canciones.find((c) => c.id === id);
+    if (ya) return { ...ya };
+    const m = ID_LR.exec(id);
+    if (!m) throw new Error('cancion desconocida');
+    if (!youtube?.configurada) throw new Error('la búsqueda de YouTube no está configurada');
+    if (registrando.has(id)) return registrando.get(id);
+    const p = registrar(id, Number(m[1]), m[2] === 'o' ? 'original' : 'karaoke', busqueda).finally(() => registrando.delete(id));
+    registrando.set(id, p);
+    return p;
+  }
+
+  async function registrar(id, lrId, tipo, busqueda) {
+    const tema = await temaDe(lrId);
+    let el = elecciones?.get(id);
+    if (!el) {
+      el = await buscarVideoPara(tema, tipo, malosDe(id));
+      elecciones?.set(id, el);
+    }
+    const variante = tema.variantes.find((v) => v.id === el.varianteId) || mejorVariante(el.duracion, tema.variantes).variante;
     await mkdir(dirCache, { recursive: true });
-    await writeFile(join(dirCache, `${meta.id}.lrc`), mejor.r.syncedLyrics, 'utf8');
-    meta.lrc = `/cache-audio/${meta.id}.lrc`;
-    meta.letraEstado = 'ok';
-    meta.letraDesfase = Math.round(meta.duracion - mejor.r.duration);
-    meta.letraAproximada = mejor.dif > C.TOLERANCIA_LETRA_S;
-    meta.letraNivel = mejor.dif <= C.TOLERANCIA_SINCRONIA_S ? 'alta' : 'media';
-    log(`[letra] ${meta.id}: letra de lrclib "${mejor.r.artistName} - ${mejor.r.trackName}" (duracion ${mejor.r.duration}s vs video ${meta.duracion}s, sincronia ${meta.letraNivel})`);
-    return meta.lrc;
-  }
-
-  // Al buscar: a los primeros resultados se les mira si hay letra de lrclib que calce con la duracion
-  // del video. Los que calzan ("alta") suben en la lista y se marcan: son los que van a salir a tiempo.
-  async function enriquecerSincronia(items) {
-    const objetivo = items.filter((i) => i.fuente === 'youtube' && i.sincronia === undefined).slice(0, C.MAX_SINCRONIA);
-    if (!objetivo.length) return;
-    const tareas = objetivo.map(async (it) => {
-      try {
-        const m = await elegirLetra(it.titulo, it.duracion);
-        it.sincronia = m ? { nivel: m.dif <= C.TOLERANCIA_SINCRONIA_S ? 'alta' : 'media', dif: Math.round(m.dif) } : { nivel: 'sin_letra' };
-      } catch {
-        it.sincronia = null;
-      }
-    });
-    await Promise.race([Promise.all(tareas), new Promise((r) => setTimeout(r, C.ESPERA_SINCRONIA_MS))]);
-  }
-  // Con el video siempre chico, lo que se lee es la letra de la app: sin letra es una mala eleccion.
-  const bonoSincronia = (i) => {
-    if (!i.karaoke?.esKaraoke) return 0;
-    return { alta: 30, media: 10, sin_letra: -20 }[i.sincronia?.nivel] ?? 0;
-  };
-
-  // Una sola busqueda de letra por cancion (la eleccion la dispara en segundo plano y la
-  // preparacion del audio la espera un rato: asi, cuando la cancion figura "lista", la letra ya esta).
-  const letrasEnCurso = new Map();
-  function asegurarLetra(meta) {
-    if (meta.lrc || meta.letraEstado) return Promise.resolve();
-    if (!letrasEnCurso.has(meta.id)) {
-      letrasEnCurso.set(meta.id, buscarLetra(meta).catch((e) => log(`[letra] ${meta.id}: ${e.message}`)));
-    }
-    return letrasEnCurso.get(meta.id);
+    await writeFile(join(dirCache, `${id}.lrc`), variante.syncedLyrics, 'utf8');
+    const meta = {
+      id,
+      origen: 'youtube',
+      tipo,
+      videoId: el.videoId,
+      titulo: tema.titulo,
+      artista: tema.artista,
+      canal: el.canal,
+      thumbnail: el.thumbnail,
+      duracion: el.duracion,
+      voces: 'solo',
+      // lo que se guarda de la eleccion: con que consulta se la encontro y cuan karaoke es
+      searchQuery: String(busqueda || '').slice(0, 100),
+      karaokeScore: el.karaokeScore,
+      esKaraoke: el.esKaraoke,
+      lrc: `/cache-audio/${id}.lrc`,
+      letraEstado: 'ok',
+      letraNivel: el.nivel,
+      letraDesfase: Math.round(el.duracion - variante.duracion),
+      letraConfianza: !!el.confiable, // se sabe que la letra cae con el video (audio original de duracion igual)
+      offsetLetra: offsets?.get(id) ?? 0, // lo que ajusto alguien la ultima vez que se canto
+    };
+    canciones.push(meta);
+    log(`[SONG] registrada ${id}: "${meta.artista} - ${meta.titulo}" -> video ${el.videoId} (${meta.canal}, ${meta.duracion}s, ${tipo}, sincronia ${el.nivel}, dif ${el.dif}s)`);
+    return { ...meta };
   }
 
   // ---------------------------------------------------------- validar archivos locales
@@ -292,13 +254,9 @@ export function crearCatalogo({
   async function prepararAudio(id) {
     const meta = canciones.find((c) => c.id === id);
     if (!meta) throw new Error('cancion desconocida');
-    // YouTube: ya se verifico con la API (embebible / publico / sin restriccion). Que el
-    // reproductor la cargue lo confirma la pantalla.
-    if (meta.origen === 'youtube') {
-      // la letra sincronizada (lrclib) se espera un poco: asi la pantalla ya la tiene al precargar
-      await Promise.race([asegurarLetra(meta), new Promise((r) => setTimeout(r, C.ESPERA_LETRA_MS))]);
-      return;
-    }
+    // YouTube: el video ya se verifico con la API (embebible / publico / sin restriccion). Que el
+    // reproductor lo cargue lo confirma la pantalla.
+    if (meta.origen === 'youtube') return; // la letra ya se guardo al elegir el video
     // biblioteca local: el archivo del repo, o el de Supabase Storage si no esta
     const rel = String(meta.audio || '');
     if (/^https?:\/\//.test(rel)) {
@@ -338,8 +296,25 @@ export function crearCatalogo({
     return promesa;
   }
 
+  // Reintentar: si es de YouTube se descarta el video que fallo y se elige el siguiente mejor
   function reintentar(id) {
+    const c = canciones.find((x) => x.id === id);
     estados.delete(id);
+    if (c?.origen === 'youtube') {
+      const malos = [...malosDe(id), c.videoId].slice(-10);
+      malosMem.set(id, malos);
+      elecciones?.set(`${id}_malos`, malos);
+      elecciones?.delete(id);
+      canciones.splice(canciones.indexOf(c), 1);
+      return resolver(id, { busqueda: c.searchQuery })
+        .then(() => asegurarAudio(id))
+        .catch((e) => {
+          const motivo = motivoDe(e);
+          estados.set(id, { estado: 'error', motivo });
+          log(`[AUDIO ERROR] ${id}: ${motivo}`);
+          onEstadoAudio(id, 'error', motivo);
+        });
+    }
     return asegurarAudio(id);
   }
 
@@ -362,8 +337,9 @@ export function crearCatalogo({
       lrc: c.lrc,
       letraEstado: c.letraEstado || (c.lrc ? 'ok' : null),
       letraNivel: c.letraNivel || null,
-      // la letra de la app se dibuja solo si va a salir a tiempo: dura casi igual que el video o alguien ya la alineo
-      letraConfiable: !!c.lrc && (c.letraNivel === 'alta' || offsets?.get(id) != null),
+      tipo: c.tipo || null,
+      // la letra va a salir a tiempo: audio original de duracion igual a la letra, o alguien ya la alineo a mano
+      letraConfiable: !!c.lrc && (c.letraConfianza === true || offsets?.get(id) != null),
       audio: c.audio,
       audioRemoto: c.audioRemoto || null,
       offsetLetra: c.offsetLetra || 0,
@@ -379,7 +355,6 @@ export function crearCatalogo({
     reintentar,
     estadoAudio,
     metaPublica,
-    buscarLetra,
     sondear,
     // Guarda el desfase de la letra de una cancion (lo ajusta quien canta en vivo)
     fijarOffset(id, valor) {

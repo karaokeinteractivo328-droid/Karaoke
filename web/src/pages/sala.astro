@@ -73,6 +73,11 @@ import Base from '../layouts/Base.astro';
           <button data-modo="duo">👥 Dúo</button>
         </div>
         <p class="chico" data-modo-ayuda></p>
+        <div class="tipoVersion" data-tipo>
+          <button type="button" data-tipo-btn="original">🎵 Original<small>letra a tiempo</small></button>
+          <button type="button" data-tipo-btn="karaoke">🎤 Karaoke<small>sin voz</small></button>
+        </div>
+        <p class="chico" data-tipo-ayuda></p>
         <input class="buscar" type="search" placeholder="Buscá por artista o título" autocomplete="off" enterkeyhint="search" />
         <p class="chico buscarEstado" data-buscar-estado></p>
         <ul class="canciones"></ul>
@@ -117,6 +122,11 @@ import Base from '../layouts/Base.astro';
           <button data-modo="duo">👥 Dúo</button>
         </div>
         <p class="chico" data-modo-ayuda></p>
+        <div class="tipoVersion" data-tipo>
+          <button type="button" data-tipo-btn="original">🎵 Original<small>letra a tiempo</small></button>
+          <button type="button" data-tipo-btn="karaoke">🎤 Karaoke<small>sin voz</small></button>
+        </div>
+        <p class="chico" data-tipo-ayuda></p>
         <input class="buscar" type="search" placeholder="Buscá por artista o título" autocomplete="off" enterkeyhint="search" />
         <p class="chico buscarEstado" data-buscar-estado></p>
         <ul class="canciones"></ul>
@@ -272,6 +282,10 @@ import Base from '../layouts/Base.astro';
     .boton.chicoBtn { font-size: 1rem; padding: 0.7rem 1rem; margin-top: 0.6rem; }
     .boton:disabled { opacity: 0.55; }
     #btnGenerarVideo[hidden], #btnNoVideo[hidden] { display: none; }
+    .tipoVersion { display: flex; gap: 0.5rem; margin: 0.4rem 0; }
+    .tipoVersion button { flex: 1; font-family: var(--fat); text-transform: uppercase; font-size: 0.85rem; border: 2px solid var(--tinta); background: #fff; color: var(--tinta); border-radius: 0.6rem; padding: 0.5rem 0.4rem; cursor: pointer; line-height: 1.1; }
+    .tipoVersion button small { display: block; font-family: var(--body); font-weight: 600; text-transform: none; font-size: 0.7rem; opacity: 0.7; margin-top: 0.15rem; }
+    .tipoVersion button.on { background: var(--tinta); color: #fff; }
     .syncFila { display: flex; gap: 0.5rem; }
     .syncFila .boton { flex: 1; }
     .syncBox .chico { margin: 0.2rem 0; }

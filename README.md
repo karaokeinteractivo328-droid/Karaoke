@@ -60,7 +60,7 @@ npm run dev
 ### Tests
 
 ```bash
-npm -w server test                  # 111 casos con reloj falso: fila, audio, catálogo, retos, palabra
+npm -w server test                  # 122 casos con reloj falso: fila, audio, catálogo, retos, palabra
 npm -w web test                     # 91 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
 npm -w server run test:integracion  # sockets REALES (3 suites, ver abajo)
 ```
@@ -105,88 +105,79 @@ no existe "esperar para siempre".
 → `CALLED` (le toca) → `SINGING` → `DONE` (ve su puntaje y su video) → de nuevo `PUBLIC`.
 El **copiloto** es un rol, no un estado.
 
-### Canciones: YouTube (búsqueda + reproductor embebido)
+### Canciones: LRCLIB manda (letra), YouTube se adapta (video)
 
-**Se elige solo desde el celu** (🎵 ¿qué querés cantar?): buscador con *debounce* de 350 ms,
-resultados que se cancelan si seguís escribiendo, tarjetas con **miniatura, título, canal,
-duración, insignia KARAOKE y botón ELEGIR**, estados de carga / vacío / error con
-**Reintentar**, y paginación con el `nextPageToken` de YouTube (scroll infinito).
+**Se elige solo desde el celu** (🎵 ¿qué querés cantar?): buscador con *debounce* de 350 ms, resultados que se
+cancelan si seguís escribiendo, estados de carga / vacío / error con **Reintentar**.
 
-**La única fuente de canciones es la YouTube Data API v3** — [server/youtube.js](server/youtube.js):
+**Todas las canciones tienen letra.** El catálogo sale de **LRCLIB** (lrclib.net): solo aparecen temas con
+**letra sincronizada**, agrupados (un tema = una tarjeta, aunque LRCLIB tenga 10 versiones; se descartan
+en vivo, remix, karaoke e instrumental). Buscar **no gasta cuota de YouTube**. La biblioteca local
+(`server/canciones`) sigue sonando sin Internet ni clave.
 
-| Pieza | Qué hace |
-|---|---|
-| `search.list` | `type=video`, `videoEmbeddable=true`, `videoSyndicated=true`, `regionCode=AR` (100 unidades de cuota por búsqueda) |
-| `videos.list` | duración real y verificación: se descartan los videos **no embebibles, privados, en vivo, con restricción de edad o de región** (1 unidad) |
-| Reproducción | **solo el reproductor oficial embebido** (IFrame API) en la pantalla grande. **No se descarga ni se extrae audio ni video de YouTube.** La canción es un `videoId` |
-| Letra | si el video de karaoke ya trae la letra (lo normal) se ve grande; si además lrclib tiene letra sincronizada compatible (opcional) se dibuja la nuestra y el video queda chico en una esquina |
-| Biblioteca local | las canciones de `server/canciones` siguen sonando **sin Internet ni clave** |
+**Al elegir, se busca el video que calza con esa letra** ([server/seleccion.js](server/seleccion.js)) con la
+**YouTube Data API v3** (`YOUTUBE_API_KEY`) y se reproduce con el **reproductor embebido** (IFrame API) en la
+pantalla. **No se descarga ni se extrae audio ni video de YouTube**: la canción es un `videoId`. Hay un
+selector arriba del buscador:
 
-**Filtro karaoke** — [server/karaoke.js](server/karaoke.js): no es una sola consulta. Se arma un
-plan (`"<texto> karaoke"`, `"<texto> instrumental"`, `"<texto> sing along / backing track"`…),
-se corre lo mínimo para tener suficientes aptos, se junta, se deduplica y se **puntúa** cada
-video con tablas de reglas fáciles de editar (`A_FAVOR`, `EN_CONTRA`, `CANALES_KARAOKE`,
-`UMBRAL`): suman karaoke / instrumental / sing along / backing track / vocal removal / minus
-one / karaoke version / lyrics; restan official music video / live / concert / reaction / cover /
-remix / full album **salvo que el título ya diga karaoke**. También cuentan la relevancia
-contra lo que escribiste y que la duración sea plausible. No es estricto: solo se excluye lo
-claramente inservible y **nunca se devuelve una lista vacía si YouTube devolvió algo** (se
-muestran los mejores candidatos, los karaoke primero).
+| Versión | Qué suena | Letra |
+|---|---|---|
+| 🎵 **Original** (por defecto) | el audio de estudio (oficial / "Audio" / lyric video) cuya duración es igual (≤ 2 s) a la versión de la letra | **a tiempo sola, sin tocar nada** (mismo master que usó LRCLIB) |
+| 🎤 **Karaoke** | un karaoke sin voz (filtro de [server/karaoke.js](server/karaoke.js)) | puede salir corrida: se avisa y se alinea con el botón 🎯 |
 
-**Letra a tiempo con el audio (lo que se averiguó).** El audio de YouTube no se puede "escuchar" para
-alinear la letra solo, y adivinar el desfase por la duración **no sirve**: medido con videos reales, uno de
-la misma duración que la letra de LRCLIB calza con desfase ≈ 0, pero uno 13 s más largo (con intro) tenía la
-voz entrando ~4-5 s después (un estimador por duración daría ~12 s). Además LRCLIB tiene varias versiones de un
-mismo tema con tiempos muy distintos (la 1ª línea de *Tití Me Preguntó* está a los 10 s en una y a los 42 s en
-otra). Por eso:
-- **Se elige la versión de la letra por duración** y al buscar se consulta LRCLIB para cada resultado: los
-  videos que duran casi igual que la letra (≤ 3 s) salen primero y llevan **🎯 LETRA A TIEMPO**.
-- **El video va SIEMPRE chico** (200×200, casi transparente) y la letra es siempre la de la app. Si la
-  letra no es confiable (video de duración distinta y sin alinear) aparece un aviso discreto abajo para
-  alinearla desde el celu; si LRCLIB no tiene letra, el aviso dice "Esta canción no tiene letra
-  sincronizada" y en la lista esos temas bajan y llevan **SIN LETRA**.
-- **Alinear una vez y queda guardado**: en el celu de quien canta (o el copiloto) **🎯** al arrancar la voz
-  alinea la letra de la app, la activa (video chico) y guarda el desfase por canción (`offsets.json`): la
-  próxima vez ya sale a tiempo. Más **⏪ Va atrasada / Va adelantada ⏩** (±0,5 s). En la pantalla:
-  `Enter` = alinear, `[` / `]` = ±0,2 s.
-- Para elegir la letra: se prueba artista+tema y variantes, se comparan palabras sin importar el orden del
-  título y se acepta hasta 90 s de diferencia de duración (gana la más cercana).
+**Por qué esto y no otra cosa** (medido con videos reales, ver el historial del proyecto): la *duración* de un
+karaoke regrabado **no** garantiza la sincronía (un karaoke de Karol G de Party Tyme dura lo mismo que la
+letra, 227 s, pero la voz entra ~25 s más tarde por un logo y una cuenta regresiva), y el audio de YouTube no
+se puede "escuchar" para alinear solo. Lo único con sincronía garantizada es el audio original; para esas
+canciones la letra de la app cae sola.
 
-**Qué se guarda al elegir**: `videoId`, título, canal, miniatura, duración, `searchQuery`
-(con qué se lo encontró) y `karaokeScore` (+ `origen`, `esKaraoke`).
+**Elección del video**: para el original se prueba `"<artista> <tema> official audio"` y, si no hay uno
+exacto, `"<artista> <tema>"`; se descartan karaoke, en vivo, covers y lo que dure > 6 s distinto a alguna
+versión de la letra, y gana el audio oficial de duración más parecida. Si no hay ninguno, el celu dice
+*"No encontramos el audio original… Probá la versión karaoke"* (y viceversa). La elección se recuerda en
+disco (`elecciones.json`): un reinicio no vuelve a gastar cuota. Si un video falla en la pantalla,
+**Reintentar** descarta ese video y elige el siguiente mejor.
 
-**Cuota y clave.** Hace falta `YOUTUBE_API_KEY` (variable de entorno del server, **nunca en el
-repo ni en un chat**). Cuota gratuita: 10.000 unidades/día ≈ 100 búsquedas nuevas; el server corta en
-9.500, cachea 6 h, junta pedidos iguales y limita por IP. Si se agota o la clave es inválida, el
-celu muestra un mensaje claro y **la biblioteca local sigue disponible**.
+**Cuota y clave.** `search.list` cuesta 100 unidades y `videos.list` 1; la cuota gratuita es 10.000/día. Elegir una
+canción gasta ~100-200 (≈ 50-100 canciones nuevas por día; las repetidas no gastan). El server corta en 9.500,
+cachea 6 h, junta pedidos iguales y limita por IP. Si se agota o la clave es inválida, el celu lo dice claro y la
+búsqueda y la biblioteca local siguen. La clave va **solo** como variable de entorno (nunca en el repo ni en un chat).
 
-**Preparación ANTES del turno.** Apenas elegís una canción el server la **verifica con la API**
-y la pantalla —que es la que suena— carga el reproductor de YouTube. "Lista" = verificada por
-el server + reproductor cargado en esa pantalla. Durante la **cuenta regresiva 3-2-1** el
-video se carga **en silencio** y queda en pausa en 0:00, así que al empezar solo se da play.
+**Qué se guarda al elegir**: `videoId`, título y artista (LRCLIB), canal, miniatura, duración, `searchQuery`,
+versión (`tipo`), nivel de sincronía y `karaokeScore` (solo karaoke).
+
+**Preparación ANTES del turno.** Apenas elegís una canción el server resuelve el video y la pantalla —que es la
+que suena— carga el reproductor. "Lista" = video verificado por el server + reproductor cargado en esa pantalla.
+Durante la **cuenta regresiva 3-2-1** el video se carga **en silencio** y queda en pausa en 0:00. `LISTO` está
+**deshabilitado** hasta que todo esté listo y el server lo rechaza igual. Si el reproductor falla en plena
+canción la performance se cierra con el motivo en vez de cantar en silencio.
 
 | Estado que ve el celu | Significa |
 |---|---|
-| ⏳ Preparando el audio… | se está verificando / cargando el reproductor en la pantalla |
-| ✅ Audio listo | verificada + reproductor cargado + sonido habilitado |
+| ⏳ Preparando el audio… | se está buscando el video / cargando el reproductor en la pantalla |
+| ✅ Audio listo | video elegido + reproductor cargado + sonido habilitado |
 | 🔇 Falta activar el sonido | el navegador de la pantalla tiene el audio bloqueado |
-| ⚠️ No se pudo preparar el audio | con el motivo (p. ej. *"el dueño no permite reproducirlo fuera de YouTube"*); **Reintentar** / **Elegir otra canción** |
+| ⚠️ No se pudo preparar el audio | con el motivo; **Reintentar** / **Elegir otra canción** |
 
-`LISTO` está **deshabilitado** hasta que todo esté listo y el server lo rechaza igual. Si el
-reproductor falla en plena canción (códigos 2/5/100/101/150, autoplay bloqueado) la
-performance se cierra con el motivo en vez de cantar en silencio.
+**El video de YouTube va siempre chico** (200×200, casi transparente, esquina inferior izquierda; el mínimo que
+permite el reproductor embebido: bajar la opacidad incumple sus condiciones, es solo para esta demo y se ajusta con
+`--yt-opacidad`) y **la letra es siempre la de la app**. Si la letra no es confiable (versión karaoke sin alinear)
+aparece un aviso discreto abajo para alinearla.
 
-**Sonido en la instalación física.** El navegador exige un toque para habilitar el audio (o
-Chrome en modo kiosco, ver abajo): hasta entonces la pantalla muestra **"🔊 Tocá la pantalla
-para activar el sonido"**. Con YouTube el sonido sale del iframe y **no pasa por el Web Audio
-API**: no se puede medir la señal (sí que esté reproduciendo, con volumen y sin silencio).
-⚠️ Por lo mismo, **el video grabado (mp4) lleva cámara + letra + tu voz, pero no la música de YouTube**.
+**Letra a tiempo en vivo (opcional).** En el celu de quien canta (o del copiloto): **🎯 ¡Ahora empieza la primera
+línea!** (se toca cuando arranca la voz) y **⏪ Va atrasada / Va adelantada ⏩** (±0,5 s). El desfase queda guardado
+**por canción** (`offsets.json`). En la pantalla: `Enter` = alinear, `[` / `]` = ±0,2 s. Con la versión original no
+hace falta tocar nada.
 
-**Diagnóstico.** `[SONG]` / `[AUDIO]` / `[AUDIO ERROR]` en la consola de la pantalla
-(`window.__karaoke.diagnostico()`).
+**Sonido en la instalación física.** El navegador exige un toque para habilitar el audio (o Chrome en modo kiosco, ver
+abajo). Con YouTube el sonido sale del iframe y **no pasa por el Web Audio API**: no se puede medir la señal (sí que esté
+reproduciendo, con volumen y sin silencio). ⚠️ Por lo mismo, **el video grabado (mp4) lleva cámara + letra + tu voz, pero
+no la música de YouTube**.
 
-Variables del server: `YOUTUBE_API_KEY`, `YOUTUBE_API_BASE` (solo para pruebas), `LRCLIB_URL`,
-`CACHE_AUDIO_DIR` (solo guarda letras `.lrc`).
+**Diagnóstico.** `[SONG]` / `[AUDIO]` / `[AUDIO ERROR]` en la consola de la pantalla (`window.__karaoke.diagnostico()`).
+
+Variables del server: `YOUTUBE_API_KEY`, `YOUTUBE_API_BASE` y `LRCLIB_URL` (solo para pruebas), `CACHE_AUDIO_DIR`
+(letras `.lrc`, `offsets.json` y `elecciones.json`).
 
 ### El celular (`/sala`, una página, una vista por rol)
 

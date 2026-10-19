@@ -48,7 +48,7 @@ export function crearYouTube({
   const C = {
     LIMITE_DIARIO: 9_500, // margen sobre las 10.000 gratuitas
     MAX_BUSQUEDAS_POR_PEDIDO: 3,
-    POR_CONSULTA: 25,
+    POR_CONSULTA: 50, // el maximo que permite search.list: mas candidatos al mismo costo de cuota
     CACHE_MS: 6 * 3600_000,
     TIMEOUT_MS: 10_000,
     REGION: 'AR',
@@ -265,6 +265,27 @@ export function crearYouTube({
     return d;
   }
 
+  // Videos reproducibles para un texto, SIN filtro karaoke (lo usa la seleccion "original": el audio
+  // de estudio del tema). Cuesta lo mismo que una busqueda (100 + 1 unidades); se cachea 6 h.
+  const cacheCandidatos = new Map();
+  async function candidatos(texto, pageToken = null) {
+    const q = String(texto || '').trim().slice(0, 120);
+    if (q.length < 2) return { items: [], nextPageToken: null, cuota: info() };
+    const clave = `${normalizar(q)}|${pageToken || ''}`;
+    const hit = cacheCandidatos.get(clave);
+    if (hit && ahora() - hit.t < C.CACHE_MS) return { ...hit.data, cuota: info(), cache: true };
+    const r = await buscarVideos(q, pageToken);
+    const det = await verificar(r.items.map((i) => i.videoId));
+    const items = r.items
+      .map((c) => ({ ...c, ...det.get(c.videoId), titulo: det.get(c.videoId)?.titulo || c.titulo, canal: det.get(c.videoId)?.canal || c.canal }))
+      .filter((c) => c.embebible && c.duracion > 0)
+      .map((c) => ({ videoId: c.videoId, titulo: c.titulo, canal: c.canal, descripcion: c.descripcion, thumbnail: c.thumbnail, duracion: c.duracion }));
+    const data = { items, nextPageToken: r.nextPageToken };
+    cacheCandidatos.set(clave, { t: ahora(), data });
+    if (cacheCandidatos.size > 200) cacheCandidatos.delete(cacheCandidatos.keys().next().value);
+    return { ...data, cuota: info() };
+  }
+
   const info = () => {
     revisarDia();
     return { usadas: cuota.usadas, limite: C.LIMITE_DIARIO, restantes: Math.max(0, C.LIMITE_DIARIO - cuota.usadas), agotada: cuota.agotadaAPI };
@@ -272,6 +293,7 @@ export function crearYouTube({
 
   return {
     buscar: buscarKaraoke,
+    candidatos,
     detalle,
     verificar,
     cuota: info,

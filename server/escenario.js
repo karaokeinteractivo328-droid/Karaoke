@@ -131,6 +131,7 @@ export function crearEscenario({
           // lo que se guarda de la cancion elegida (YouTube): videoId, canal, miniatura, con que
           // consulta se la encontro y cuan "karaoke" es
           origen: c.origen || 'local',
+          tipo: c.tipo || null, // 'original' | 'karaoke' (canciones de YouTube)
           videoId: c.videoId || null,
           canal: c.canal || c.artista,
           thumbnail: c.thumbnail || null,

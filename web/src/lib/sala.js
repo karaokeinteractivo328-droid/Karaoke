@@ -553,12 +553,27 @@ function pintarAudio() {
   }
 }
 
-// Una tarjeta de resultado: miniatura, titulo, canal, duracion, insignia KARAOKE y boton ELEGIR.
+// Version de la cancion: ORIGINAL (audio de estudio: la letra cae a tiempo sola) o KARAOKE (sin voz,
+// pero la letra puede salir corrida). La eleccion se recuerda en este celu.
+const AYUDA_TIPO = {
+  original: 'Suena el tema original: la letra siempre va a tiempo, sin tocar nada.',
+  karaoke: 'Sin la voz del cantante, pero la letra puede salir corrida (y se alinea con un botón).',
+};
+let tipoVersion = (() => { try { return localStorage.getItem('karaoke:tipo') === 'karaoke' ? 'karaoke' : 'original'; } catch { return 'original'; } })();
+function pintarTipo() {
+  for (const b of document.querySelectorAll('[data-tipo-btn]')) b.classList.toggle('on', b.dataset.tipoBtn === tipoVersion);
+  for (const p of document.querySelectorAll('[data-tipo-ayuda]')) p.textContent = AYUDA_TIPO[tipoVersion];
+}
+// los ids de LRCLIB llevan la version elegida: "lr-123" -> "lr-123-o" / "lr-123-k"
+const idConVersion = (id) => (/^lr-\d+$/.test(id) ? `${id}-${tipoVersion === 'karaoke' ? 'k' : 'o'}` : id);
+const esLaElegida = (id) => !!yo?.cancionId && (yo.cancionId === id || yo.cancionId.startsWith(`${id}-`));
+
+// Una tarjeta de resultado: titulo, artista, duracion, etiqueta y boton ELEGIR.
 function tarjetaCancion(c) {
   const li = document.createElement('li');
   li.dataset.id = c.id;
   li.className = 'resultado';
-  if (c.id === yo?.cancionId) li.classList.add('elegida');
+  if (esLaElegida(c.id)) li.classList.add('elegida');
   const miniatura = document.createElement(c.thumbnail ? 'img' : 'span');
   miniatura.className = 'miniatura';
   if (c.thumbnail) {
@@ -586,24 +601,18 @@ function tarjetaCancion(c) {
     k.textContent = c.fuente === 'local' ? 'LISTA' : 'KARAOKE';
     etiquetas.append(k);
   }
-  // este video dura casi igual que la letra de lrclib: la letra de la app sale a tiempo
-  if (c.sincronia?.nivel === 'alta') {
+  // todo lo que viene de LRCLIB tiene letra sincronizada
+  if (c.fuente === 'lrclib') {
     const k = document.createElement('span');
     k.className = 'tagSync';
-    k.textContent = '🎯 LETRA A TIEMPO';
-    etiquetas.append(k);
-  }
-  if (c.sincronia?.nivel === 'sin_letra') {
-    const k = document.createElement('span');
-    k.className = 'tagSinLetra';
-    k.textContent = 'SIN LETRA';
+    k.textContent = '🎶 CON LETRA';
     etiquetas.append(k);
   }
   if (etiquetas.childElementCount) info.append(etiquetas);
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'elegir';
-  btn.textContent = c.id === yo?.cancionId ? '✓ ELEGIDA' : 'ELEGIR';
+  btn.textContent = esLaElegida(c.id) ? '✓ ELEGIDA' : 'ELEGIR';
   li.append(miniatura, info, btn);
   return li;
 }
@@ -629,14 +638,14 @@ function pintarBuscador(e) {
     for (const c of e.items) ul.append(tarjetaCancion(c));
     estadoEl.textContent =
       e.estado === 'cargando'
-        ? 'Buscando karaokes en YouTube…'
+        ? 'Buscando canciones con letra…'
         : e.estado === 'vacio'
           ? `No encontramos resultados para "${e.q}". Probá con el artista y el nombre del tema.`
           : e.q
-            ? `${e.items.length} resultado${e.items.length === 1 ? '' : 's'}${e.remoto ? ' · los karaoke primero' : ' · la búsqueda de YouTube no está disponible en este equipo'}`
+            ? `${e.items.length} resultado${e.items.length === 1 ? '' : 's'}${e.remoto ? ' · todas con letra sincronizada' : ' · la búsqueda online no está disponible en este equipo'}`
             : e.remoto
-              ? 'Escribí un artista o tema: buscamos la versión karaoke en YouTube.'
-              : 'Disponibles ahora (listas para cantar). La búsqueda de YouTube no está configurada.';
+              ? 'Escribí un artista o tema: todas las canciones tienen letra sincronizada.'
+              : 'Disponibles ahora (listas para cantar). La búsqueda online no está configurada.';
     errEl.hidden = !e.error;
     errEl.querySelector('.error').textContent = e.error || '';
     errEl.querySelector('[data-buscar-reintentar]').hidden = e.errorCodigo === 'sin_clave';
@@ -647,10 +656,11 @@ function pintarBuscador(e) {
 
 // Elegir una cancion: se marca al instante ("preparando") y el server la registra y
 // empieza a bajar/validar el audio YA, no cuando te toque el turno.
-function elegirCancion(id) {
+function elegirCancion(base) {
+  const id = idConVersion(base);
   if (!yo || !enFila(yo) || yo.cancionId === id) return;
-  const c = resultados.items.find((x) => x.id === id);
-  yo = { ...yo, cancionId: id, cancion: c ? { id: c.id, titulo: c.titulo, artista: c.canal || c.artista, thumbnail: c.thumbnail, origen: c.fuente === 'youtube' ? 'youtube' : 'local' } : yo.cancion, audio: { estado: 'preparando', etapa: 'servidor' } };
+  const c = resultados.items.find((x) => x.id === base);
+  yo = { ...yo, cancionId: id, cancion: c ? { id, titulo: c.titulo, artista: c.canal || c.artista, thumbnail: c.thumbnail, origen: c.fuente === 'local' ? 'local' : 'youtube' } : yo.cancion, audio: { estado: 'preparando', etapa: 'servidor' } };
   firmaSelector = '';
   render();
   enviar('cancion:elegir', { cancionId: id, busqueda: resultados.q || '' }, () => {
@@ -697,6 +707,13 @@ function elegirModo(modo) {
 }
 
 document.addEventListener('click', (e) => {
+  const tipo = e.target.closest?.('[data-tipo-btn]');
+  if (tipo) {
+    tipoVersion = tipo.dataset.tipoBtn === 'karaoke' ? 'karaoke' : 'original';
+    try { localStorage.setItem('karaoke:tipo', tipoVersion); } catch {}
+    pintarTipo();
+    return;
+  }
   const li = e.target.closest?.('.canciones li');
   if (li && li.dataset.id) {
     elegirCancion(li.dataset.id);
@@ -884,4 +901,5 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---------------------------------------------------------------- canciones
+pintarTipo();
 buscador.iniciar(); // arranca con la biblioteca local (lo que se puede cantar ya)

@@ -16,6 +16,7 @@ import cors from 'cors';
 import { crearCatalogo } from './catalogo.js';
 import { crearYouTube } from './youtube.js';
 import { crearOffsets } from './offsets.js';
+import { crearAlmacen } from './almacen.js';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { readFile, mkdir, writeFile, rm, rename, stat, readdir } from 'node:fs/promises';
@@ -129,8 +130,11 @@ await mkdir(DIR_CACHE, { recursive: true }).catch(() => {});
 const youtube = crearYouTube({ log: (m) => console.log(m) });
 // desfase de la letra por cancion (lo ajusta quien canta; vale para las veces siguientes)
 const offsets = crearOffsets({ archivo: join(DIR_CACHE, 'offsets.json'), log: (m) => console.log(m) });
+// que video se eligio para cada cancion (un reinicio no vuelve a gastar cuota de YouTube)
+const elecciones = crearAlmacen({ archivo: join(DIR_CACHE, 'elecciones.json'), log: (m) => console.log(m) });
 const catalogo = crearCatalogo({
   offsets,
+  elecciones,
   canciones,
   dirLocal: __dirname,
   dirCache: DIR_CACHE,
@@ -525,7 +529,7 @@ io.on('connection', (socket) => {
     // tras un reinicio el catalogo online esta vacio: si el celu estaba esperando con una cancion
     // de ahi, se vuelve a registrar y a preparar en segundo plano (sin frenar la reconexion)
     const idc = datos.intencion?.cancionId;
-    if (typeof idc === 'string' && /^yt-[A-Za-z0-9_-]{11}$/.test(idc) && !canciones.some((c) => c.id === idc)) {
+    if (typeof idc === 'string' && /^lr-\d{1,10}-[ok]$/.test(idc) && !canciones.some((c) => c.id === idc)) {
       catalogo
         .resolver(idc, { busqueda: String(datos.intencion?.busqueda || '') })
         .then(() => {
@@ -583,7 +587,9 @@ io.on('connection', (socket) => {
         await catalogo.resolver(String(cancionId || ''), { busqueda: String(busqueda || '') });
       } catch (e) {
         console.warn(`[SONG] no se pudo registrar ${cancionId}: ${e.message}`);
-        return { ok: false, error: e?.codigo === 'no_reproducible' ? e.message : 'No se pudo cargar esa canción. Probá con otra.' };
+        // errores que la persona puede entender (cuota, sin version, video no reproducible...)
+        const claros = ['no_reproducible', 'sin_version', 'sin_letra', 'cuota_agotada', 'clave_invalida', 'red'];
+        return { ok: false, error: claros.includes(e?.codigo) ? e.message : 'No se pudo cargar esa canción. Probá con otra.' };
       }
       const r = escenario.elegirCancion(t, cancionId, modo);
       if (r.ok) {
