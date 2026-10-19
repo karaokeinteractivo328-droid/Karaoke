@@ -19,6 +19,8 @@ export const PUNTOS_TOTAL_RETOS = 30; // el tope de retos del puntaje (Cancion 4
 export const INTERVALO_RETOS_S = 30; // un reto cada ~30 s: seguido, pero sin abrumar (cada reto dura 7-10 s)
 export const MIN_RETOS = 3;
 export const MAX_RETOS = 7;
+export const PALABRAS_POR_CANCION = 3; // el reto de COMPLETAR LA PALABRA aparece 3 veces en TODAS las canciones con letra
+const REINTENTOS_PALABRA = 3; // si no hay una palabra para tapar en ese momento, se reintenta mas adelante
 export const RETOS_POR_CANCION = MIN_RETOS; // (compatibilidad: el minimo)
 
 // Zona "util" de la cancion: ni al arranque ni sobre el final
@@ -71,10 +73,10 @@ function mezclar(a, azar) {
   return r;
 }
 
-// Que tipo va en cada lugar del plan: una de cada 3 es de la palabra (si hay letra) y el resto, gestos
-// variados (los primeros, faciles de entender) sin repetir el mismo dos veces seguidas.
+// Que tipo va en cada lugar del plan: SIEMPRE 3 de la palabra (si hay letra), repartidas parejo, y el resto,
+// gestos variados (los primeros, faciles de entender) sin repetir el mismo dos veces seguidas.
 function asignarTipos(n, conPalabra, azar) {
-  const palabras = conPalabra ? Math.max(1, Math.round(n / 3)) : 0;
+  const palabras = conPalabra ? Math.min(n, PALABRAS_POR_CANCION) : 0;
   const lugaresPalabra = new Set();
   for (let j = 0; j < palabras; j++) lugaresPalabra.add(Math.min(n - 1, Math.floor(((j + 0.5) * n) / palabras)));
   const tipos = [];
@@ -95,7 +97,7 @@ function asignarTipos(n, conPalabra, azar) {
 // El arreglo trae `valor` (puntos de cada reto) y `conPalabra`.
 export function armarPlan({ duracion, inicios = [], conPalabra = true, azar = Math.random, cantidad } = {}) {
   const dur = Math.max(30, Number(duracion) || 0);
-  const n = cantidad ?? cantidadDeRetos(dur);
+  const n = cantidad ?? Math.max(cantidadDeRetos(dur), conPalabra ? PALABRAS_POR_CANCION : 0);
   const { desde, hasta } = ventanaRetos(dur);
   const lineas = [...inicios].filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
   const tipos = asignarTipos(n, conPalabra, azar);
@@ -111,6 +113,7 @@ export function armarPlan({ duracion, inicios = [], conPalabra = true, azar = Ma
   plan.sort((a, b) => a.at - b.at);
   plan.valor = puntosPorReto(cantidadFinal);
   plan.conPalabra = !!conPalabra;
+  plan.fin = hasta + 10; // pasado este momento ya no se reprograma nada
   return plan;
 }
 
@@ -206,8 +209,19 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
 
     const item = plan.find((p) => p.estado === 'pendiente' && t >= p.at);
     if (!item) return;
-    // si se paso mucho (pausa, carga lenta) ese momento ya no tiene sentido
-    if (t > item.at + 12) { item.estado = 'salteado'; return; }
+    // si se paso mucho (pausa, carga lenta, o no habia una palabra para tapar) ese momento ya no tiene sentido
+    if (t > item.at + 12) {
+      if (item.tipo === 'palabra' && (item.reintentos || 0) < REINTENTOS_PALABRA && t < (plan.fin ?? Infinity)) {
+        // el reto de la palabra NO se pierde: se vuelve a intentar un poco mas adelante (siguiente linea)
+        item.reintentos = (item.reintentos || 0) + 1;
+        item.at = t + 3;
+        return;
+      }
+      // agotados los reintentos: con camara se cambia por un gesto para no perder el reto; sin camara se saltea
+      if (item.tipo === 'palabra' && hayManos) { item.tipo = FACILES[Math.floor(azar() * FACILES.length)]; item.at = t; return; }
+      item.estado = 'salteado';
+      return;
+    }
 
     if (item.tipo === 'palabra') {
       const p = onPalabra?.({ t });
@@ -217,10 +231,9 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
         onCartel?.(cartel(t));
         return;
       }
-      // todavia no hay una palabra con tiempo suficiente: se reintenta en cada linea. Si pasan unos
-      // segundos y no se pudo, el reto se cambia por un gesto (si hay camara) en vez de perderse.
-      if (t > item.at + 5 && hayManos) item.tipo = FACILES[Math.floor(azar() * FACILES.length)];
-      else return;
+      // todavia no hay una palabra con tiempo suficiente: se reintenta en cada tick (cada linea trae
+      // palabras nuevas); si en 12 s no se pudo, se reprograma mas adelante (ver arriba)
+      return;
     }
     // sin camara / tracking no se pueden pedir gestos: si hay letra se prueba con la palabra
     if (!hayManos && item.tipo !== 'palabra') {

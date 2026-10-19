@@ -791,20 +791,45 @@ const elActual = $('#lineaActual');
 const elSig = $('#lineaSiguiente');
 let palabras = [];
 let lineaRender = -99;
-let palabraTapada = null; // { span, texto, t0 } - la que oculta el reto "adiviná la palabra"
+let palabraTapada = null; // { span, texto, t0, lineaIdx, k } - la que oculta el reto "adiviná la palabra"
+let sigPalabras = []; // palabras de la linea SIGUIENTE (tambien se puede tapar una de ahi)
+let sigLinea = -1; // indice (en `letras`) de esa linea siguiente
 
 function mostrarLinea(idx, forzar = false) {
   let i = idx;
   while (letras[i] && !letras[i].texto) i++;
   if (!forzar && i === lineaRender && idx >= 0) return;
   lineaRender = i;
-  palabraTapada = null; // la linea se reconstruye entera, la referencia vieja ya no sirve
+  // la linea se reconstruye entera: si habia una palabra tapada (de esta linea o de la siguiente) se
+  // vuelve a tapar en el lugar que le corresponde cuando se terminen de armar las palabras
+  const tapada = palabraTapada;
+  palabraTapada = null;
 
   elActual.innerHTML = '';
   palabras = [];
   const cur = letras[i];
-  const sig = [letras[i + 1], letras[i + 2]].find((l) => l?.texto)?.texto || '';
-  elSig.textContent = sig;
+  sigLinea = letras[i + 1]?.texto ? i + 1 : letras[i + 2]?.texto ? i + 2 : -1;
+  const sig = sigLinea >= 0 ? letras[sigLinea].texto : '';
+  // la linea siguiente tambien se arma palabra por palabra: asi el reto puede tapar una de ahi
+  elSig.textContent = '';
+  sigPalabras = [];
+  if (sigLinea >= 0) {
+    for (const { palabra, t0 } of tiemposPalabras(sig, letras[sigLinea].tiempo, letras[sigLinea + 1]?.tiempo)) {
+      const span = document.createElement('span');
+      span.textContent = palabra + ' ';
+      elSig.appendChild(span);
+      sigPalabras.push({ span, t0 });
+    }
+  }
+  const retapar = (lista, indiceLinea) => {
+    if (!tapada || tapada.lineaIdx !== indiceLinea || !lista[tapada.k]) return false;
+    const sp = lista[tapada.k].span;
+    sp.textContent = '▧'.repeat(Math.max(3, limpiar(tapada.texto).length)) + ' ';
+    sp.classList.add('tapada');
+    palabraTapada = { ...tapada, span: sp };
+    return true;
+  };
+  retapar(sigPalabras, sigLinea);
   // color por voz (modo dúo)
   const voz = voces[i] || 'p1';
   if (!espejo) socket.emit('pantalla:letra', { actual: cur?.texto || '', siguiente: sig, voz: modoActual === 'duo' ? voz : null });
@@ -825,6 +850,7 @@ function mostrarLinea(idx, forzar = false) {
     elActual.appendChild(span);
     palabras.push({ span, t0 });
   }
+  retapar(palabras, i);
   elActual.classList.remove('entrando');
   void elActual.offsetWidth;
   elActual.classList.add('entrando');
@@ -845,7 +871,8 @@ function pintarPalabras(t) {
 }
 
 // --- Reto de la palabra ----------------------------------------------------
-// Tapa una palabra de la linea actual que todavia no se canto, arma 3 opciones
+// Tapa una palabra de la linea actual (o, si no hay una con tiempo, de la SIGUIENTE) que todavia no se
+// canto, arma 3 opciones
 // (la correcta + 2 palabras de la misma cancion) y se las manda al server, que
 // guarda la respuesta correcta. Se contesta con la mano (elegir + pellizco
 // sostenido) o desde el celu del cantante/copiloto; el server compara.
@@ -858,10 +885,13 @@ const mezclado = (a) => a.map((x) => [Math.random(), x]).sort((p, q) => p[0] - q
 function prepararPalabra(tAudio) {
   if (espejo || palabraTapada || palabraEstado || !socket.connected) return null;
   const t = reloj.letra(offsetLetra); // tiempo de letra (el mismo que usa la pantalla)
-  // la palabra tiene que llegar con tiempo para contestar (2.6 s a 12 s)
-  const cand = palabras
-    .map((p) => ({ ...p, txt: limpiar(p.span.textContent) }))
+  // la palabra tiene que llegar con tiempo para contestar (2.6 s a 12 s). Las lineas de 3-4 s casi nunca
+  // tienen una asi dentro de la linea actual: entonces se tapa una de la linea siguiente, que ya se ve abajo.
+  const candidatas = (lista, linea) => lista
+    .map((p, k) => ({ ...p, k, linea, lista, txt: limpiar(p.span.textContent) }))
     .filter((p) => p.t0 - t >= 2.6 && p.t0 - t <= 12 && p.txt.length >= 3);
+  let cand = candidatas(palabras, lineaRender);
+  if (!cand.length && sigLinea >= 0) cand = candidatas(sigPalabras, sigLinea);
   if (!cand.length) return null;
   const elegida = cand.sort((a, b) => b.txt.length - a.txt.length || b.t0 - a.t0)[0];
   const correcta = elegida.txt;
@@ -885,8 +915,8 @@ function prepararPalabra(tAudio) {
   const id = Math.random().toString(36).slice(2, 8);
 
   // la frase TAPADA (con un hueco donde va la palabra): el celu la muestra junto a las opciones
-  const frase = palabras.map((p) => (p.span === elegida.span ? '_____' : p.span.textContent.trim())).filter(Boolean).join(' ').slice(0, 160);
-  palabraTapada = { span: elegida.span, texto: elegida.span.textContent, t0: elegida.t0 };
+  const frase = elegida.lista.map((p) => (p.span === elegida.span ? '_____' : p.span.textContent.trim())).filter(Boolean).join(' ').slice(0, 160);
+  palabraTapada = { span: elegida.span, texto: elegida.span.textContent, t0: elegida.t0, lineaIdx: elegida.linea, k: elegida.k };
   elegida.span.textContent = '▧'.repeat(Math.max(3, correcta.length)) + ' ';
   elegida.span.classList.add('tapada');
   palabraEstado = { id, opciones, respondida: false };

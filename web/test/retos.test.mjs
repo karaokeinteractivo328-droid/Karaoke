@@ -58,16 +58,22 @@ test('plan: cada reto arranca justo en el comienzo de una linea de letra', () =>
   for (const p of plan) assert.ok(INICIOS.includes(p.at), `${p.at} es inicio de linea`);
 });
 
-test('plan: una de cada 3 es la de la palabra (si hay letra) y los gestos varian sin repetirse seguidos', () => {
-  for (let seed = 1; seed <= 20; seed++) {
-    const plan = armarPlan({ duracion: 200, inicios: INICIOS, azar: lcg(seed) });
-    assert.equal(plan.filter((p) => p.tipo === 'palabra').length, 2, '5 retos -> 2 de palabra');
-    for (let i = 1; i < plan.length; i++) assert.notEqual(plan[i].tipo, plan[i - 1].tipo, 'nunca el mismo dos veces seguidas');
-    assert.ok(plan[0].tipo !== 'palabra' || plan[1].tipo !== 'palabra');
-    assert.equal(plan.conPalabra, true);
+test('plan: en TODA cancion con letra hay exactamente 3 retos de la palabra, repartidos, y los gestos varian sin repetirse seguidos', () => {
+  for (const duracion of [60, 90, 120, 180, 200, 237, 306, 480]) {
+    for (let seed = 1; seed <= 10; seed++) {
+      const plan = armarPlan({ duracion, inicios: INICIOS, azar: lcg(seed) });
+      assert.equal(plan.filter((p) => p.tipo === 'palabra').length, 3, `${duracion} s: 3 de la palabra`);
+      assert.ok(plan.length >= 3);
+      for (let i = 1; i < plan.length; i++) if (plan[i].tipo !== 'palabra') assert.notEqual(plan[i].tipo, plan[i - 1].tipo, 'un gesto nunca se repite seguido');
+      assert.equal(plan.conPalabra, true);
+    }
   }
+  // repartidas: una en cada tercio de la cancion
+  const p = armarPlan({ duracion: 300, inicios: INICIOS, azar: lcg(4) });
+  const w = p.filter((x) => x.tipo === 'palabra').map((x) => x.at);
+  assert.ok(w[0] < 130 && w[1] > 100 && w[1] < 200 && w[2] > 170, `repartidas: ${w.map((x) => Math.round(x)).join(', ')} s`);
   const sin = armarPlan({ duracion: 200, inicios: INICIOS, azar: lcg(2), conPalabra: false });
-  assert.equal(sin.filter((p) => p.tipo === 'palabra').length, 0);
+  assert.equal(sin.filter((p) => p.tipo === 'palabra').length, 0, 'sin letra no hay palabra');
   assert.equal(sin.length, 5);
   assert.equal(sin.conPalabra, false);
 });
@@ -228,7 +234,7 @@ test('palabra: la resuelve el resultado del server (acierto y error), una vez', 
   assert.equal(b.log.resultados.at(-1).palabra, 'noche');
 });
 
-test('palabra: si todavia no hay una palabra con tiempo se reintenta (y con camara se cambia por un gesto)', () => {
+test('palabra: si no hay palabra para tapar el reto NO se pierde: se reprograma mas adelante hasta 3 veces (y despues se cambia por un gesto)', () => {
   let intentos = 0;
   const { r, log } = montar({ palabra: () => (++intentos >= 5 ? { id: 'w9', hasta: 9999, opciones: ['a1', 'b2', 'c3'] } : null) });
   const it = r.plan.find((p) => p.tipo === 'palabra');
@@ -236,24 +242,43 @@ test('palabra: si todavia no hay una palabra con tiempo se reintenta (y con cama
   assert.ok(intentos >= 5);
   assert.equal(log.cartel.filter(Boolean).length > 0, true);
 
-  // nunca hay palabra: pasados unos segundos el reto no se pierde, se convierte en un gesto
-  const b = montar({ palabra: () => null });
-  const it2 = b.r.plan.find((p) => p.tipo === 'palabra');
-  correr(b.r, it2.at, it2.at + 6.5, DATOS_VACIOS);
-  assert.notEqual(it2.tipo, 'palabra', 'se cambio por un gesto');
-  assert.ok(b.log.cartel.filter(Boolean).some((c) => c.tipo === 'gesto'), 'y aparece el cartel del gesto');
+  // no hay palabra durante 14 s: no se salta, se reprograma
+  const a = montar({ palabra: () => null });
+  const ia = a.r.plan.find((p) => p.tipo === 'palabra');
+  const at0 = ia.at;
+  correr(a.r, at0, at0 + 14, DATOS_VACIOS);
+  assert.equal(ia.tipo, 'palabra');
+  assert.equal(ia.estado, 'pendiente', 'sigue pendiente');
+  assert.ok(ia.at > at0 + 10, 'reprogramado un poco mas adelante');
+  assert.equal(ia.reintentos, 1);
 
-  // sin camara no hay gesto posible: se saltea
+  // y si finalmente aparece una palabra, el reto sale
+  let hay = false;
+  const b = montar({ palabra: () => (hay ? { id: 'wz', hasta: 9999, opciones: ['a1', 'b2', 'c3'] } : null) });
+  const ib = b.r.plan.find((p) => p.tipo === 'palabra');
+  correr(b.r, ib.at, ib.at + 14, DATOS_VACIOS);
+  hay = true;
+  correr(b.r, ib.at + 14, ib.at + 30, DATOS_VACIOS);
+  assert.ok(b.log.cartel.filter(Boolean).some((c) => c.tipo === 'palabra'), 'aparece apenas se puede');
+
+  // agotados los reintentos con camara: se cambia por un gesto para no perder el reto
   const c = montar({ palabra: () => null });
-  const it3 = c.r.plan.find((p) => p.tipo === 'palabra');
-  correr(c.r, it3.at, it3.at + 14, DATOS_VACIOS, { hayManos: false });
-  assert.equal(it3.estado, 'salteado');
+  const ic = c.r.plan.find((p) => p.tipo === 'palabra');
+  correr(c.r, ic.at, ic.at + 70, DATOS_VACIOS);
+  assert.notEqual(ic.tipo, 'palabra', 'se cambio por un gesto');
+
+  // sin camara no hay gesto posible: despues de los reintentos se saltea
+  const d = montar({ palabra: () => null });
+  const id3 = d.r.plan.find((p) => p.tipo === 'palabra');
+  correr(d.r, id3.at, id3.at + 80, DATOS_VACIOS, { hayManos: false });
+  assert.equal(id3.estado, 'salteado');
 });
 
 test('sin camara los gestos se cambian por el reto de la palabra (asi no se pierden los retos)', () => {
   let n = 0;
   const { r, log } = montar({ palabra: () => ({ id: `w${++n}`, hasta: 9999, opciones: ['a1', 'b2', 'c3'] }) });
   const gesto = r.plan.find((p) => p.tipo !== 'palabra');
+  if (!gesto) return; // (en canciones cortas todos los retos son de la palabra)
   correr(r, gesto.at, gesto.at + 1, DATOS_VACIOS, { hayManos: false });
   assert.equal(gesto.tipo, 'palabra', 'el gesto pasa a ser de palabra');
   assert.ok(log.cartel.filter(Boolean).some((c) => c.tipo === 'palabra'));

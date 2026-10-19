@@ -346,8 +346,8 @@ caída: los retos con gestos se saltean y el reto de la palabra sigue funcionand
 ### Retos durante la canción
 
 [retos.js](web/src/lib/retos.js) arma, para cada performance, un **plan de retos: uno cada ~30 s**
-(entre 3 y 7 según lo que dure la canción; una de cada 3 es la de **completar la palabra** y el resto,
-gestos con la mano distintos sin repetirse seguidos). Cada reto vale 30 ÷ cantidad (tope total 30 puntos,
+(entre 3 y 7 según lo que dure la canción; **en todas las canciones con letra hay exactamente 3 retos de
+completar la palabra**, repartidas parejo, y el resto son gestos con la mano distintos sin repetirse seguidos). Cada reto vale 30 ÷ cantidad (tope total 30 puntos,
 p. ej. 5 retos de 6). Atado a la canción:
 
 - Cada reto arranca en el **comienzo de una línea de letra**, en segundos de **audio** (el
@@ -356,11 +356,13 @@ p. ej. 5 retos de 6). Atado a la canción:
   gesto se llena una línea verde: la persona ve que la detecta.
 - Un gesto cuenta recién cuando se **sostiene** (≈0,4 s, con tolerancia al parpadeo). Una
   vez cumplido, el reto termina: aunque mantengas las manos arriba 3 s, suma **una** vez.
-- **Completar la palabra**: en la pantalla grande la línea aparece con la palabra tapada (▧▧▧) y las opciones abajo; en el celu
+- **Completar la palabra**: en la pantalla grande la línea aparece con la palabra tapada (▧▧▧) y las opciones abajo (si la línea
+  actual es corta y no hay una palabra con tiempo, se tapa una de **la línea siguiente**, que ya se ve abajo); en el celu
   de quien canta (o del copiloto) se ve **la frase con el hueco + las opciones** (la respuesta nunca se publica).
 - Al cumplirse: **✓ ¡LO HICISTE! +N PUNTOS** (abajo, sin tapar la letra). Si se acaba el tiempo, termina sin puntos.
-- Para que no se pierdan retos: si no hay una palabra adecuada tras unos segundos, el reto pasa a ser un gesto; si no hay
-  cámara o tracking de manos, los gestos pasan a ser de la palabra (que se contesta desde el celu).
+- Para que no se pierdan retos: si en ese momento no hay una palabra que se pueda tapar, el reto de la palabra **se reprograma
+  más adelante** (hasta 3 veces); recién si no hubo caso se cambia por un gesto. Si no hay cámara o tracking de manos, los
+  gestos pasan a ser de la palabra (que se contesta desde el celu).
 
 Gestos disponibles: ✋ una mano · 🙌 dos manos · 👋 saludo · 💖 corazón · ✊ puño alto ·
 ✌️ paz · 👆 señalar al cielo.

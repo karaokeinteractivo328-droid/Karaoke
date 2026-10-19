@@ -341,8 +341,8 @@ img { max-width: 100%; }
 #retoAyuda { font-family: var(--body); font-weight: 700; font-size: 0.55em; text-transform: none; opacity: 0.8; letter-spacing: 0.02em; }
 #retoAyuda[hidden] { display: none; }
 /* la palabra tapada en la letra y su revelado */
-#lineaActual span.tapada { color: var(--rosa-hot); letter-spacing: 0.08em; }
-#lineaActual span.revelada { color: var(--rosa-hot); text-decoration: underline; text-underline-offset: 0.12em; }
+#lineaActual span.tapada, #lineaSiguiente span.tapada { color: var(--rosa-hot); letter-spacing: 0.08em; }
+#lineaActual span.revelada, #lineaSiguiente span.revelada { color: var(--rosa-hot); text-decoration: underline; text-underline-offset: 0.12em; }
 
 /* feedback grande: por que se ganó el punto */
 #retoFeedback {
