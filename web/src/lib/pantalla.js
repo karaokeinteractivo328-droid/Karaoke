@@ -884,13 +884,15 @@ function prepararPalabra(tAudio) {
   const dur = Math.min(10, Math.max(2.3, elegida.t0 - t - 0.3));
   const id = Math.random().toString(36).slice(2, 8);
 
+  // la frase TAPADA (con un hueco donde va la palabra): el celu la muestra junto a las opciones
+  const frase = palabras.map((p) => (p.span === elegida.span ? '_____' : p.span.textContent.trim())).filter(Boolean).join(' ').slice(0, 160);
   palabraTapada = { span: elegida.span, texto: elegida.span.textContent, t0: elegida.t0 };
   elegida.span.textContent = '▧'.repeat(Math.max(3, correcta.length)) + ' ';
   elegida.span.classList.add('tapada');
   palabraEstado = { id, opciones, respondida: false };
 
   const limite = setTimeout(() => retos.cancelarPalabra(id), 2500); // el server no contesto
-  socket.emit('pantalla:retoPalabra', { id, opciones, correcta: opciones.indexOf(correcta), dur, puntos: retos.valor }, (r) => {
+  socket.emit('pantalla:retoPalabra', { id, opciones, correcta: opciones.indexOf(correcta), dur, puntos: retos.valor, frase }, (r) => {
     clearTimeout(limite);
     if (!r?.ok) retos.cancelarPalabra(id);
   });

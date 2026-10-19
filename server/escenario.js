@@ -676,7 +676,7 @@ export function crearEscenario({
   // la compara y avisa el resultado a todos.
   const normalizar = (w) => String(w || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9ñ]/g, '');
 
-  function pantallaRetoPalabra({ id, opciones, correcta, dur, puntos } = {}) {
+  function pantallaRetoPalabra({ id, opciones, correcta, dur, puntos, frase } = {}) {
     if (!actual || etapa !== ETAPAS.PLAYING) return { ok: false, error: 'No se está cantando' };
     if (actual.retoPalabra && !actual.retoPalabra.resuelto) return { ok: false, error: 'Ya hay un reto activo' };
     if (!Array.isArray(opciones) || opciones.length < 2 || opciones.length > 4) return { ok: false, error: 'Opciones inválidas' };
@@ -691,6 +691,8 @@ export function crearEscenario({
       correcta: i,
       hasta: ahora() + ms,
       resuelto: null,
+      // la frase con el hueco donde va la palabra (el celu la muestra junto a las opciones)
+      frase: String(frase || '').replace(/\s+/g, ' ').trim().slice(0, 160),
       // con mas retos por cancion cada uno vale menos (el total sigue topeado en RETOS_MAX)
       puntos: Math.min(C.RETO_PUNTOS, Math.max(1, Math.round(Number(puntos) || C.RETO_PUNTOS))),
     };
@@ -861,7 +863,7 @@ export function crearEscenario({
   function retoPublico() {
     const r = actual?.retoPalabra;
     if (!r || r.resuelto || etapa !== ETAPAS.PLAYING) return null;
-    return { id: r.id, opciones: r.opciones, hasta: r.hasta };
+    return { id: r.id, opciones: r.opciones, hasta: r.hasta, frase: r.frase || '' };
   }
 
   function actualPublico() {

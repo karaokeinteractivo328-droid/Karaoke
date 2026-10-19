@@ -135,6 +135,27 @@ test('palabra: con mas retos por cancion cada uno vale menos (la pantalla avisa 
   assert.equal(m2.e.snapshot().actual.retosPuntos, 10);
 });
 
+test('palabra: se publica la FRASE con el hueco (para que el celu la muestre junto a las opciones), nunca la respuesta suelta', () => {
+  const m = mundo();
+  const a = m.persona(1, 'A');
+  m.e.entrarFila(a);
+  aEscenario(m, a);
+  assert.equal(m.e.pantallaRetoPalabra({ ...RETO, frase: '  Hace   rato que no se na de _____ ' }).ok, true);
+  const pub = m.e.snapshot().actual.retoPalabra;
+  assert.equal(pub.frase, 'Hace rato que no se na de _____', 'frase prolija, con el hueco');
+  assert.deepEqual(pub.opciones, ['amor', 'noche', 'fuego']);
+  assert.equal(JSON.stringify(m.e.snapshot()).includes('"correcta"'), false);
+  m.e.responderReto(a, { id: 'w1', opcion: 1 });
+  assert.equal(m.e.snapshot().actual.retoPalabra, null, 'resuelto: ya no se publica');
+  // sin frase (pantalla vieja) todo sigue andando
+  const m2 = mundo();
+  const b = m2.persona(2, 'B');
+  m2.e.entrarFila(b);
+  aEscenario(m2, b);
+  m2.e.pantallaRetoPalabra(RETO);
+  assert.equal(m2.e.snapshot().actual.retoPalabra.frase, '');
+});
+
 test('palabra: el cantante responde bien -> se compara, acierta y suma 10', () => {
   const m = mundo();
   const a = m.persona(1, 'A');

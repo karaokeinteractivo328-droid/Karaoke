@@ -156,7 +156,8 @@ import Base from '../layouts/Base.astro';
       </div>
       <div class="tarjeta destacada retoBox" data-reto hidden>
         <p class="kicker">🫥 completá la palabra</p>
-        <p class="chico retoDime">Elegí la palabra que falta en la letra</p>
+        <p class="retoFrase" data-reto-frase></p>
+        <p class="chico retoDime">Elegí la palabra que falta</p>
         <div class="retoOpc"></div>
       </div>
       <p class="retoRes" data-reto-res hidden></p>
@@ -213,7 +214,8 @@ import Base from '../layouts/Base.astro';
       </div>
       <div class="tarjeta destacada retoBox" data-reto hidden>
         <p class="kicker">🫥 completá la palabra</p>
-        <p class="chico retoDime">Elegí la palabra que falta en la letra</p>
+        <p class="retoFrase" data-reto-frase></p>
+        <p class="chico retoDime">Elegí la palabra que falta</p>
         <div class="retoOpc"></div>
       </div>
       <p class="retoRes" data-reto-res hidden></p>
@@ -288,6 +290,8 @@ import Base from '../layouts/Base.astro';
     .boton:disabled { opacity: 0.55; }
     #btnGenerarVideo[hidden], #btnNoVideo[hidden] { display: none; }
     .codigoCard .codigo { font-size: 2.4rem; letter-spacing: 0.35em; margin: 0.2rem 0; }
+    .retoFrase { font-family: var(--fat); text-transform: uppercase; font-size: 1.35rem; line-height: 1.15; margin: 0.3rem 0 0.1rem; }
+    .retoFrase .hueco { display: inline-block; min-width: 3.2ch; border-bottom: 4px solid var(--rosa-hot); color: transparent; margin: 0 0.1em; }
     .syncFila { display: flex; gap: 0.5rem; }
     .syncFila .boton { flex: 1; }
     .syncBox .chico { margin: 0.2rem 0; }

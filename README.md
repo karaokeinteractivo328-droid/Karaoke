@@ -60,7 +60,7 @@ npm run dev
 ### Tests
 
 ```bash
-npm -w server test                  # 123 casos con reloj falso: fila, audio, catálogo, retos, palabra
+npm -w server test                  # 124 casos con reloj falso: fila, audio, catálogo, retos, palabra
 npm -w web test                     # 93 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
 npm -w server run test:integracion  # sockets REALES (3 suites, ver abajo)
 ```
@@ -356,6 +356,8 @@ p. ej. 5 retos de 6). Atado a la canción:
   gesto se llena una línea verde: la persona ve que la detecta.
 - Un gesto cuenta recién cuando se **sostiene** (≈0,4 s, con tolerancia al parpadeo). Una
   vez cumplido, el reto termina: aunque mantengas las manos arriba 3 s, suma **una** vez.
+- **Completar la palabra**: en la pantalla grande la línea aparece con la palabra tapada (▧▧▧) y las opciones abajo; en el celu
+  de quien canta (o del copiloto) se ve **la frase con el hueco + las opciones** (la respuesta nunca se publica).
 - Al cumplirse: **✓ ¡LO HICISTE! +N PUNTOS** (abajo, sin tapar la letra). Si se acaba el tiempo, termina sin puntos.
 - Para que no se pierdan retos: si no hay una palabra adecuada tras unos segundos, el reto pasa a ser un gesto; si no hay
   cámara o tracking de manos, los gestos pasan a ser de la palabra (que se contesta desde el celu).

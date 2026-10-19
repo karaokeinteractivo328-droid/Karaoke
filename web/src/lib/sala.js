@@ -484,6 +484,17 @@ function renderReto() {
   for (const box of document.querySelectorAll('[data-reto]')) {
     box.hidden = !mostrar;
     if (!mostrar) continue;
+    // la frase con la palabra tapada (un hueco rosa) para ver el contexto, sin regalar la respuesta
+    const fr = box.querySelector('[data-reto-frase]');
+    if (fr) {
+      fr.textContent = '';
+      const partes = String(reto.frase || '').split('_____');
+      partes.forEach((t, k) => {
+        fr.append(t);
+        if (k < partes.length - 1) { const h = document.createElement('span'); h.className = 'hueco'; h.textContent = '____'; fr.append(h); }
+      });
+      fr.hidden = !reto.frase;
+    }
     const opc = box.querySelector('.retoOpc');
     if (opc.dataset.id !== reto.id) {
       opc.dataset.id = reto.id;
