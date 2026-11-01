@@ -39,7 +39,7 @@ test('motivo del error: la causa real, no el comando que fallo', () => {
 const pista = (id, dur, extra = {}) => ({ id, trackName: 'Bohemian Rhapsody', artistName: 'Queen', duration: dur, syncedLyrics: LRC, instrumental: false, ...extra });
 const video = (n, dur, titulo = 'Queen - Bohemian Rhapsody (Official Audio)', canal = 'Queen Official') => ({ videoId: vid(n), titulo, canal, thumbnail: `https://i.ytimg.com/vi/${n}.jpg`, duracion: dur });
 
-async function armar({ configurada = true, candidatos, buscarKaraoke, pistas, lrclibCae = false, offsets, elecciones } = {}) {
+async function armar({ configurada = true, candidatos, buscarKaraoke, pistas, lrclibCae = false, offsets, elecciones, fallas = 0, config = {} } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'karaoke-cat-'));
   await mkdir(join(dir, 'cache'), { recursive: true });
   const eventos = [];
@@ -62,9 +62,11 @@ async function armar({ configurada = true, candidatos, buscarKaraoke, pistas, lr
     },
   };
   const lista = pistas ?? [pista(1, 355), pista(2, 354)];
+  let fallasRestantes = fallas; // las primeras N respuestas de lrclib son 503 ("server busy")
   const fetchFn = async (url) => {
     const u = String(url);
     llamadas.lrclib.push(u);
+    if (fallasRestantes > 0) { fallasRestantes--; return { ok: false, status: 503, headers: { get: () => '0' }, json: async () => ({ name: 'ServerOverloaded' }) }; }
     if (lrclibCae) return { ok: false, status: 503, json: async () => ({}) };
     const m = /\/get\/(\d+)/.exec(u);
     if (m) {
@@ -73,8 +75,8 @@ async function armar({ configurada = true, candidatos, buscarKaraoke, pistas, lr
     }
     return { ok: true, json: async () => lista };
   };
-  const cat = crearCatalogo({ canciones, dirLocal: dir, dirCache: join(dir, 'cache'), youtube, offsets, elecciones, fetchFn, ejecutar: async () => ({ stdout: '', stderr: '' }), onEstadoAudio: (id, e, m) => eventos.push([id, e, m]) });
-  return { cat, canciones, llamadas, eventos, dir, limpiar: () => rm(dir, { recursive: true, force: true }) };
+  const cat = crearCatalogo({ canciones, dirLocal: dir, dirCache: join(dir, 'cache'), youtube, offsets, elecciones, fetchFn, config: { ESPERA_REINTENTO_MS: 1, ...config }, ejecutar: async () => ({ stdout: '', stderr: '' }), onEstadoAudio: (id, e, m) => eventos.push([id, e, m]) });
+  return { cat, canciones, llamadas, eventos, dir, fallar: (n) => { fallasRestantes = n; }, limpiar: () => rm(dir, { recursive: true, force: true }) };
 }
 const almacenEnMemoria = () => { const m = new Map(); return { get: (k) => (m.has(k) ? m.get(k) : null), set: (k, v) => m.set(k, v), delete: (k) => m.delete(k), m }; };
 
@@ -114,9 +116,99 @@ test('buscar: sin clave de YouTube solo se ofrece la biblioteca local (nunca tem
 test('buscar: si LRCLIB no responde se informa claro y la biblioteca local sigue disponible', async () => {
   const x = await armar({ lrclibCae: true });
   const r = await x.cat.buscar('corre');
-  assert.equal(r.error.codigo, 'lrclib');
-  assert.match(r.error.mensaje, /catálogo de letras/);
+  assert.equal(r.error.codigo, 'lrclib_ocupado');
+  assert.match(r.error.mensaje, /saturado/);
   assert.equal(r.items[0].id, 'corre');
+  await x.limpiar();
+});
+
+test('buscar: LRCLIB saturado (503) se reintenta y la busqueda sale igual (antes: "no aparece nada")', async () => {
+  const x = await armar({ fallas: 3 });
+  const r = await x.cat.buscar('queen');
+  assert.equal(r.error, null, 'despues de 3 intentos fallidos el 4to anduvo');
+  assert.ok(r.items.some((i) => i.fuente === 'lrclib'));
+  assert.equal(x.llamadas.lrclib.length, 4);
+  await x.limpiar();
+});
+
+test('buscar: si LRCLIB sigue caido despues de varios intentos, error claro "saturado" (y la biblioteca local sigue)', async () => {
+  const x = await armar({ fallas: 99 });
+  const r = await x.cat.buscar('corre');
+  assert.equal(r.error.codigo, 'lrclib_ocupado');
+  assert.equal(x.llamadas.lrclib.length, 8, 'probo 8 veces antes de rendirse');
+  assert.equal(r.items[0].id, 'corre');
+  await x.limpiar();
+});
+
+test('buscar: si LRCLIB se cae, se usa la copia guardada (aunque ya este vencida) de esa misma busqueda', async () => {
+  const x = await armar({ config: { CACHE_LRCLIB_MS: 1 } }); // la copia "vence" enseguida
+  const r1 = await x.cat.buscar('queen');
+  assert.equal(r1.error, null);
+  await new Promise((r) => setTimeout(r, 10));
+  x.fallar(99); // y ahora LRCLIB se satura
+  const r2 = await x.cat.buscar('queen');
+  assert.equal(r2.error, null, 'sin error: se uso la copia guardada');
+  assert.deepEqual(r2.items.map((i) => i.id), r1.items.map((i) => i.id), 'los mismos resultados que antes');
+  await x.limpiar();
+});
+
+test('buscando un ARTISTA salen primero sus canciones y despues las que solo lo nombran', async () => {
+  const pistas = [
+    pista(11, 200, { trackName: 'Toni y Tini', artistName: 'Varrosi' }),
+    pista(12, 183, { trackName: 'Miénteme', artistName: 'TINI' }),
+    pista(13, 210, { trackName: 'Princesa', artistName: 'TINI, KAROL G' }),
+    pista(14, 190, { trackName: 'Tini-dal', artistName: 'Neoton' }),
+  ];
+  const x = await armar({ pistas });
+  const r = await x.cat.buscar('tini');
+  const lr = r.items.filter((i) => i.fuente === 'lrclib');
+  assert.deepEqual(lr.slice(0, 2).map((i) => i.artista.startsWith('TINI')), [true, true], 'primero las de TINI');
+  assert.ok(lr.length === 4);
+  await x.limpiar();
+});
+
+test('elegir una cancion que aparecio en la busqueda NO vuelve a pedirle nada a LRCLIB (antes fallaba con 503 al elegir)', async () => {
+  const x = await armar({ candidatos: () => [video(2, 355)], buscarKaraoke: () => [] });
+  await x.cat.buscar('queen');
+  const antes = x.llamadas.lrclib.length;
+  // a partir de ahora LRCLIB esta caido: igual se puede elegir
+  const y = x; // mismo catalogo
+  const m = await y.cat.resolver('lr-1-o');
+  assert.equal(m.videoId, vid(2));
+  assert.equal(x.llamadas.lrclib.length, antes, 'cero pedidos a LRCLIB al elegir');
+  await x.limpiar();
+});
+
+test('elegir sin haberla visto en esta sesion y con LRCLIB saturado: error claro (no "no se pudo cargar")', async () => {
+  const x = await armar({ fallas: 99, candidatos: () => [video(2, 355)] });
+  await assert.rejects(() => x.cat.resolver('lr-1-o'), (e) => e.codigo === 'lrclib_ocupado' && /saturado/.test(e.message));
+  await x.limpiar();
+});
+
+test('elegir con LRCLIB saturado se recupera apenas vuelve (reintenta dentro del mismo pedido)', async () => {
+  const x = await armar({ fallas: 2, candidatos: () => [video(2, 355)] });
+  const m = await x.cat.resolver('lr-1-o');
+  assert.equal(m.videoId, vid(2));
+  await x.limpiar();
+});
+
+test('tras un reinicio, una cancion ya elegida se registra desde el disco (ni LRCLIB ni YouTube)', async () => {
+  const elecciones = almacenEnMemoria();
+  const x = await armar({ elecciones, candidatos: () => [video(2, 355)] });
+  await x.cat.resolver('lr-1-o');
+  // otro "arranque" del server (comparte disco y elecciones) con LRCLIB y YouTube caidos
+  const { crearCatalogo: crear } = await import('../catalogo.js');
+  const canciones2 = [];
+  const cat2 = crear({
+    canciones: canciones2, dirLocal: x.dir, dirCache: join(x.dir, 'cache'), elecciones,
+    youtube: { configurada: true, cuota: () => ({}), candidatos: async () => { throw new Error('no deberia ir a YouTube'); }, buscar: async () => { throw new Error('no deberia ir a YouTube'); } },
+    fetchFn: async () => ({ ok: false, status: 503, headers: { get: () => '0' }, json: async () => ({}) }),
+    config: { ESPERA_REINTENTO_MS: 1 }, ejecutar: async () => ({ stdout: '', stderr: '' }),
+  });
+  const m = await cat2.resolver('lr-1-o');
+  assert.equal(m.videoId, vid(2));
+  assert.equal(m.titulo, 'Bohemian Rhapsody');
+  assert.equal(cat2.metaPublica('lr-1-o').letraConfiable, true);
   await x.limpiar();
 });
 

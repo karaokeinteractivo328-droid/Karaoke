@@ -145,3 +145,32 @@ test('consulta vacia = biblioteca local (se pide con q vacia)', async () => {
   assert.equal(b.estado.estado, 'ok');
   assert.equal(b.estado.remoto, false, 'la interfaz sabe que no hay catalogo online');
 });
+
+test('LRCLIB saturado: el buscador reintenta solo (sin que la persona toque nada) y al final muestra los resultados', async () => {
+  let llamadas = 0;
+  const fetchFn = async () => {
+    llamadas++;
+    if (llamadas < 3) return { ok: true, status: 200, json: async () => ({ q: 'tini', items: [], nextPageToken: null, remoto: true, error: { codigo: 'lrclib_ocupado', mensaje: 'saturado' } }) };
+    return { ok: true, status: 200, json: async () => ({ q: 'tini', items: [item(1), item(2)], nextPageToken: null, remoto: true, error: null }) };
+  };
+  const cambios = [];
+  const b = crearBuscador({ base: 'http://srv', fetchFn, debounceMs: 5, esperaAutoMs: 10, onCambio: (e) => cambios.push(e) });
+  b.consultar('tini');
+  await espera(200);
+  assert.equal(llamadas, 3, 'pidio 3 veces solo');
+  assert.equal(b.estado.items.length, 2);
+  assert.equal(b.estado.estado, 'ok');
+  assert.equal(b.estado.error, null);
+  assert.ok(cambios.some((c) => c.estado === 'cargando' && /reintentando/.test(c.error || '')), 'mientras tanto la persona ve "reintentando…" y no un error');
+});
+
+test('LRCLIB saturado todo el rato: tras los reintentos automaticos queda el error con boton Reintentar', async () => {
+  let llamadas = 0;
+  const fetchFn = async () => { llamadas++; return { ok: true, status: 200, json: async () => ({ q: 'tini', items: [], nextPageToken: null, remoto: true, error: { codigo: 'lrclib_ocupado', mensaje: 'El catálogo de letras (LRCLIB) está saturado' } }) }; };
+  const b = crearBuscador({ base: 'http://srv', fetchFn, debounceMs: 5, esperaAutoMs: 5, maxReintentosAuto: 2 });
+  b.consultar('tini');
+  await espera(200);
+  assert.equal(llamadas, 3, '1 pedido + 2 reintentos automaticos');
+  assert.equal(b.estado.estado, 'error');
+  assert.match(b.estado.error, /saturado/);
+});

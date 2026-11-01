@@ -36,7 +36,8 @@ export function tituloLimpio(trackName) {
   return t.replace(/^[-–|:\s]+|[-–|:\s]+$/g, '');
 }
 
-const palabras = (t) => normalizar(String(t || '').replace(/\(.*?\)|\[.*?\]/g, ' ')).split(' ').filter((w) => w.length > 1 && !RUIDO.has(w));
+// (los numeros cuentan aunque tengan un solo digito: "Parte 1" y "Parte 2" no son el mismo tema)
+const palabras = (t) => normalizar(String(t || '').replace(/\(.*?\)|\[.*?\]/g, ' ')).split(' ').filter((w) => (w.length > 1 || /\d/.test(w)) && !RUIDO.has(w));
 const tokensTitulo = (titulo) => [...new Set(palabras(tituloLimpio(titulo)))].sort().join(' ');
 const tokensArtista = (artista) => new Set(palabras(artista));
 // Mismo tema = mismo titulo y artistas que se solapan ("TINI" y "TINI, Maria Becerra" son el mismo; dos

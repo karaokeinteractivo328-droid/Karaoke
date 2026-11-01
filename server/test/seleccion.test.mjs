@@ -41,6 +41,12 @@ test('agrupar: un tema con muchas versiones es UNO solo; en vivo, remix, karaoke
   assert.ok([1, 2].includes(mien.id), 'el representante es de la version principal (183 s), no de la recortada');
 });
 
+test('agrupar: "Parte 1" y "Parte 2" (numeros de un digito) NO son el mismo tema', () => {
+  const crudo = [r(1, 'Artista', 'Parte 1', 200), r(2, 'Artista', 'Parte 2', 200), r(3, 'Artista', 'Parte 3', 200)];
+  assert.equal(agruparTemas(crudo).length, 3);
+  assert.equal(mismoTema('Artista', 'Tema 1', 'Artista', 'Tema 2'), false);
+});
+
 test('agrupar: respeta el maximo y tolera basura', () => {
   const crudo = Array.from({ length: 30 }, (_, i) => r(i + 1, `Artista ${i}`, `Tema numero ${i}`, 200));
   assert.equal(agruparTemas(crudo, { max: 15 }).length, 15);

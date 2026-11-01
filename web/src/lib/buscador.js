@@ -16,10 +16,14 @@ export function crearBuscador({
   debounceMs = 350,
   minimo = 2,
   onCambio = () => {},
+  maxReintentosAuto = 3,
+  esperaAutoMs = 2500,
 } = {}) {
+  let timerAuto = null;
   let timer = null;
   let ctl = null;
   let generacion = 0;
+  let reintentosAuto = 0; // el catalogo de letras (LRCLIB) a veces se satura: se reintenta solo unas veces
   const st = { q: '', items: [], nextPageToken: null, hayMas: false, estado: 'cargando', error: null, errorCodigo: null, remoto: true, cargandoMas: false };
 
   const cambio = () => onCambio({ ...st, items: [...st.items] });
@@ -51,6 +55,16 @@ export function crearBuscador({
       // error parcial: hay resultados locales pero YouTube fallo (cuota, red, falta de clave...)
       st.error = j.error?.mensaje || null;
       st.errorCodigo = j.error?.codigo || null;
+      if (j.error && ['lrclib_ocupado', 'lrclib'].includes(j.error.codigo) && !st.items.length && reintentosAuto < maxReintentosAuto) {
+        reintentosAuto++;
+        const q2 = q;
+        clearTimeout(timerAuto);
+        timerAuto = setTimeout(() => { if (st.q === q2) pedir(q2, null, true); }, esperaAutoMs);
+        st.estado = 'cargando';
+        st.error = 'El catálogo de letras está saturado: reintentando…';
+        return;
+      }
+      if (!j.error) reintentosAuto = 0;
       st.estado = st.items.length ? 'ok' : j.error ? 'error' : 'vacio';
     } catch (e) {
       if (e.name === 'AbortError' || mia !== generacion) return;
@@ -70,6 +84,8 @@ export function crearBuscador({
     clearTimeout(timer);
     if (q === st.q && st.estado !== 'error' && !ya && generacion > 0) return; // misma consulta: nada que hacer
     st.q = q;
+    reintentosAuto = 0;
+    clearTimeout(timerAuto);
     // una letra sola no justifica pegarle a la red: se espera a que haya algo para buscar
     if (q.length > 0 && q.length < minimo) {
       ctl?.abort();
@@ -92,12 +108,13 @@ export function crearBuscador({
       if (st.estado !== 'ok' || !st.hayMas || st.cargandoMas) return;
       return pedir(st.q, st.nextPageToken, false);
     },
-    reintentar: () => pedir(st.q, null, true),
+    reintentar: () => { reintentosAuto = 0; return pedir(st.q, null, true); },
     get estado() {
       return { ...st, items: [...st.items] };
     },
     cancelar() {
       clearTimeout(timer);
+      clearTimeout(timerAuto);
       ctl?.abort();
     },
   };

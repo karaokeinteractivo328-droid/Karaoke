@@ -13,7 +13,7 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { normalizar } from './texto.js';
 import { normalizarOffset } from './offsets.js';
@@ -52,6 +52,9 @@ export function crearCatalogo({
     POR_PAGINA_LOCAL: 12,
     TIMEOUT_LRCLIB_MS: 6_000,
     CACHE_LRCLIB_MS: 6 * 3600_000,
+    INTENTOS_LRCLIB: 8, // lrclib se satura (503 "server busy"): se reintenta antes de rendirse
+    ESPERA_REINTENTO_MS: 900, // base de la espera entre intentos (si lrclib manda retry-after se respeta)
+    CACHE_TEMAS_MS: 24 * 3600_000, // temas vistos en una busqueda: elegirlos despues no necesita volver a lrclib
     MAX_TEMAS: 15, // temas distintos por busqueda
     LRCLIB: process.env.LRCLIB_URL || LRCLIB_POR_DEFECTO,
     ...config,
@@ -101,47 +104,99 @@ export function crearCatalogo({
       return salida;
     }
     try {
-      const temas = agruparTemas(await lrclib(`/search?q=${encodeURIComponent(consulta)}`), { max: C.MAX_TEMAS });
+      const temas = agruparTemas(await lrclib(`/search?q=${encodeURIComponent(consulta)}`), { max: C.MAX_TEMAS * 2 });
+      // se recuerdan con todas sus versiones y letras: al ELEGIR una no hace falta volver a pedirle nada a lrclib
+      for (const t of temas) recordarTema(t);
+      // buscando un ARTISTA ("tini") primero salen sus canciones, despues las que solo lo nombran
+      const pal = normalizar(consulta).split(' ').filter(Boolean);
+      const delArtista = (t) => (pal.every((w) => normalizar(t.artista).includes(w)) ? 0 : 1);
+      temas.sort((a, b) => delArtista(a) - delArtista(b));
       // la biblioteca local ya tiene esos temas (y suenan sin Internet): no se repiten
-      salida.items = [...loc, ...temas.filter((t) => !loc.some((x) => mismoTema(x.artista, x.titulo, t.artista, t.titulo))).map(itemLrclib)];
+      salida.items = [...loc, ...temas.slice(0, C.MAX_TEMAS).filter((t) => !loc.some((x) => mismoTema(x.artista, x.titulo, t.artista, t.titulo))).map(itemLrclib)];
     } catch (e) {
-      salida.error = { codigo: 'lrclib', mensaje: 'No se pudo consultar el catálogo de letras. Probá de nuevo.' };
+      const ocupado = e.ocupado || /\b(429|5\d\d)\b/.test(String(e.message)) || e.name === 'AbortError';
+      salida.error = ocupado
+        ? { codigo: 'lrclib_ocupado', mensaje: 'El catálogo de letras (LRCLIB) está saturado en este momento. Probá de nuevo en unos segundos.' }
+        : { codigo: 'lrclib', mensaje: 'No se pudo consultar el catálogo de letras. Probá de nuevo.' };
       log(`[catalogo] busqueda fallo (lrclib): ${e.message}`);
     }
     return salida;
   }
 
   // ------------------------------------------------------------------- lrclib
-  const cacheLrclib = new Map(); // ruta -> { t, datos } | { promesa }
+  const cacheLrclib = new Map(); // ruta -> { t, datos } | { promesa, viejo }
+  const dormirMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Un pedido a lrclib. Cuando esta saturado contesta 503 "server busy" (con retry-after): se reintenta
+  // varias veces antes de rendirse, esperando lo que pide. 404 no se reintenta.
+  async function pedirLrclib(ruta) {
+    let ultimo;
+    for (let i = 0; i < C.INTENTOS_LRCLIB; i++) {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), C.TIMEOUT_LRCLIB_MS);
+      let espera = C.ESPERA_REINTENTO_MS * (1 + i * 0.5);
+      try {
+        const r = await fetchFn(`${C.LRCLIB}${ruta}`, { signal: ctl.signal, headers: { 'Lrclib-Client': 'karaoke-interactivo (proyecto universitario)' } });
+        if (r.ok) return await r.json();
+        const err = new Error(`lrclib respondio ${r.status}`);
+        if (r.status === 404) { err.definitivo = true; throw err; }
+        err.ocupado = r.status === 429 || r.status >= 500;
+        const pedida = Number(r.headers?.get?.('retry-after'));
+        if (pedida > 0) espera = Math.min(4000, pedida * 1000) + Math.random() * 300;
+        err.espera = espera;
+        throw err;
+      } catch (e) {
+        ultimo = e;
+        if (e.definitivo || (e.ocupado === undefined && e.name !== 'AbortError' && !/fetch|network|ECONN|ENOTFOUND|socket/i.test(String(e.message)))) break;
+        if (e.name === 'AbortError') e.ocupado = true;
+        if (i < C.INTENTOS_LRCLIB - 1) {
+          log(`[catalogo] lrclib ocupado (${e.message}); reintento ${i + 1}/${C.INTENTOS_LRCLIB - 1}`);
+          await dormirMs(e.espera ?? espera);
+        }
+      } finally {
+        clearTimeout(t);
+      }
+    }
+    if (ultimo && ultimo.ocupado === undefined && !ultimo.definitivo) ultimo.ocupado = true;
+    throw ultimo;
+  }
+
   async function lrclib(ruta) {
     const hit = cacheLrclib.get(ruta);
     if (hit?.promesa) return hit.promesa;
     if (hit && Date.now() - hit.t < C.CACHE_LRCLIB_MS) return hit.datos;
-    const promesa = (async () => {
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), C.TIMEOUT_LRCLIB_MS);
-      try {
-        const r = await fetchFn(`${C.LRCLIB}${ruta}`, { signal: ctl.signal, headers: { 'Lrclib-Client': 'karaoke-interactivo (proyecto universitario)' } });
-        if (!r.ok) throw new Error(`lrclib respondio ${r.status}`);
-        return await r.json();
-      } finally {
-        clearTimeout(t);
-      }
-    })();
-    cacheLrclib.set(ruta, { promesa });
+    const viejo = hit?.datos; // copia vencida: sirve si lrclib no responde
+    const promesa = pedirLrclib(ruta);
+    cacheLrclib.set(ruta, { promesa, viejo });
     try {
       const datos = await promesa;
       cacheLrclib.set(ruta, { t: Date.now(), datos });
       if (cacheLrclib.size > 500) cacheLrclib.delete(cacheLrclib.keys().next().value);
       return datos;
     } catch (e) {
+      if (viejo !== undefined) {
+        // lrclib no responde pero hay una copia vieja de esta misma consulta: mejor eso que nada
+        cacheLrclib.set(ruta, { t: Date.now() - C.CACHE_LRCLIB_MS + 60_000, datos: viejo });
+        log(`[catalogo] lrclib caido: se usa la copia guardada de ${ruta}`);
+        return viejo;
+      }
       cacheLrclib.delete(ruta);
       throw e;
     }
   }
 
+  // Temas que aparecieron en una busqueda (con todas sus versiones y letras)
+  const temasVistos = new Map(); // idLrclib -> { t, tema }
+  function recordarTema(t) {
+    const tema = { id: t.id, artista: t.artista, titulo: t.titulo, duracion: t.duracion, variantes: t.variantes };
+    for (const id of new Set([t.id, ...t.variantes.map((v) => v.id)])) temasVistos.set(id, { t: Date.now(), tema });
+    if (temasVistos.size > 600) temasVistos.delete(temasVistos.keys().next().value);
+  }
+
   // El tema de lrclib con TODAS sus versiones sincronizadas (cada una con su duracion)
   async function temaDe(lrId) {
+    const visto = temasVistos.get(lrId);
+    if (visto && Date.now() - visto.t < C.CACHE_TEMAS_MS) return { ...visto.tema, id: lrId };
     const t = await lrclib(`/get/${lrId}`);
     if (!t?.syncedLyrics) throw new YouTubeError('sin_letra', 'Esa canción ya no tiene letra sincronizada.');
     const titulo = tituloLimpio(t.trackName || t.name);
@@ -203,10 +258,30 @@ export function crearCatalogo({
   }
 
   async function registrar(id, lrId, tipo, busqueda) {
-    const tema = await temaDe(lrId);
     let el = elecciones?.get(id);
+    let tema = null;
+    // ya se eligio antes y la letra esta en disco: no hace falta ni lrclib ni YouTube (sirve tras un reinicio)
+    if (el?.tema) {
+      try {
+        const lrc = await readFile(join(dirCache, `${id}.lrc`), 'utf8');
+        tema = { id: lrId, ...el.tema, variantes: [{ id: el.varianteId, duracion: el.varianteDuracion, syncedLyrics: lrc }] };
+      } catch {
+        tema = null;
+      }
+    }
+    if (!tema) {
+      try {
+        tema = await temaDe(lrId);
+      } catch (e) {
+        if (e instanceof YouTubeError) throw e;
+        if (e.definitivo) throw new YouTubeError('sin_letra', 'Esa canción ya no está en el catálogo de letras.');
+        throw new YouTubeError('lrclib_ocupado', 'El catálogo de letras (LRCLIB) está saturado en este momento. Probá de nuevo en unos segundos.');
+      }
+    }
     if (!el) {
       el = await buscarVideoPara(tema, tipo, malosDe(id));
+      const v = tema.variantes.find((x) => x.id === el.varianteId) || mejorVariante(el.duracion, tema.variantes).variante;
+      el = { ...el, varianteId: v.id, varianteDuracion: v.duracion, tema: { artista: tema.artista, titulo: tema.titulo, duracion: tema.duracion } };
       elecciones?.set(id, el);
     }
     const variante = tema.variantes.find((v) => v.id === el.varianteId) || mejorVariante(el.duracion, tema.variantes).variante;

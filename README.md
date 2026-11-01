@@ -60,7 +60,7 @@ npm run dev
 ### Tests
 
 ```bash
-npm -w server test                  # 124 casos con reloj falso: fila, audio, catálogo, retos, palabra
+npm -w server test                  # 133 casos con reloj falso: fila, audio, catálogo, retos, palabra
 npm -w web test                     # 93 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
 npm -w server run test:integracion  # sockets REALES (3 suites, ver abajo)
 ```
@@ -114,6 +114,10 @@ cancelan si seguís escribiendo, estados de carga / vacío / error con **Reinten
 **letra sincronizada**, agrupados (un tema = una tarjeta, aunque LRCLIB tenga 10 versiones; se descartan
 en vivo, remix, karaoke e instrumental). Buscar **no gasta cuota de YouTube**. La biblioteca local
 (`server/canciones`) sigue sonando sin Internet ni clave.
+
+**LRCLIB a veces se satura** (responde 503 "server busy"). El server reintenta hasta 8 veces respetando su `retry-after`, usa la
+copia guardada de esa misma búsqueda si sigue caído, **recuerda los temas de cada búsqueda para que elegir uno no vuelva a pedirle
+nada a LRCLIB**, y el celu reintenta solo ("reintentando…"). Buscando un artista (p. ej. "tini") salen primero sus canciones.
 
 **Al elegir, se busca el video que calza con esa letra** ([server/seleccion.js](server/seleccion.js)) con la
 **YouTube Data API v3** (`YOUTUBE_API_KEY`) y se reproduce con el **reproductor embebido** (IFrame API) en la

@@ -680,7 +680,7 @@ io.on('connection', (socket) => {
       } catch (e) {
         console.warn(`[SONG] no se pudo registrar ${cancionId}: ${e.message}`);
         // errores que la persona puede entender (cuota, sin version, video no reproducible...)
-        const claros = ['no_reproducible', 'sin_version', 'sin_letra', 'cuota_agotada', 'clave_invalida', 'red'];
+        const claros = ['no_reproducible', 'sin_version', 'sin_letra', 'cuota_agotada', 'clave_invalida', 'red', 'lrclib_ocupado'];
         return { ok: false, error: claros.includes(e?.codigo) ? e.message : 'No se pudo cargar esa canción. Probá con otra.' };
       }
       const r = escenario.elegirCancion(t, cancionId, modo);
