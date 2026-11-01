@@ -733,6 +733,13 @@ export function crearEscenario({
     return resolverReto(id, opcion, esCantante ? 'cantante' : 'copiloto');
   }
 
+  // A quien le llega el aliento al celu: el que canta y su copiloto (solo mientras suena)
+  function destinatariosAliento() {
+    if (etapa !== ETAPAS.PLAYING || !actual) return [];
+    const cantante = participantes.get(actual.token);
+    return [actual.token, cantante?.copiloto].filter(Boolean);
+  }
+
   // Quien puede mover la letra en vivo: el que canta o su copiloto, y solo mientras suena
   function puedeSincronizarLetra(token) {
     if (etapa !== ETAPAS.PLAYING || !actual) return false;
@@ -1067,6 +1074,7 @@ export function crearEscenario({
     pantallaRetoFin,
     responderReto,
     puedeSincronizarLetra,
+    destinatariosAliento,
     audioServidorEstado,
     pantallaAudio,
     pantallaAudioFallo,

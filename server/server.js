@@ -754,6 +754,14 @@ io.on('connection', (socket) => {
     const n = catalogo.fijarOffset(String(cancionId || ''), offset);
     if (n !== null) console.log(`[letra] desfase de ${cancionId} guardado: ${n} s`);
   }));
+  // nadie canta y la letra lo pide: la pantalla alienta y el celu de quien canta (y su copiloto) tambien se entera
+  socket.on('pantalla:aliento', soloPantalla(({ mensaje, tipo } = {}) => {
+    const texto = String(mensaje || '').slice(0, 80);
+    if (!texto) return;
+    for (const token of escenario.destinatariosAliento()) {
+      for (const id of socketsPorToken.get(token) || []) io.to(id).emit('aliento', { mensaje: texto, tipo: tipo === 'bien' ? 'bien' : 'aliento' });
+    }
+  }));
   socket.on('pantalla:reiniciar', soloPantalla(() => escenario.reinicioSeguro()));
   // la linea de letra actual, para el teleprompter del copiloto
   socket.on('pantalla:letra', soloPantalla(({ actual, siguiente, voz } = {}) => {

@@ -22,6 +22,8 @@ export function crearAudioBus(audioEl) {
   let mezcla = null; // entrada comun de la grabacion (compresor -> salidaGrab)
   let gananciaMusica = null;
   let gananciaVoz = null;
+  let analizadorMic = null; // mide el nivel del micro (para saber si alguien canta)
+  let datosMic = null;
   let energiaSuave = 0;
 
   if (AC) {
@@ -63,6 +65,10 @@ export function crearAudioBus(audioEl) {
     try {
       const m = actx.createMediaStreamSource(stream);
       m.connect(gananciaVoz); // el mic SOLO va a la grabación (no a los parlantes -> sin acople)
+      analizadorMic = actx.createAnalyser();
+      analizadorMic.fftSize = 1024;
+      datosMic = new Float32Array(analizadorMic.fftSize);
+      m.connect(analizadorMic);
       micConectado = true;
     } catch (e) {
       console.warn('[audioBus] mic:', e.message);
@@ -80,8 +86,19 @@ export function crearAudioBus(audioEl) {
     return energiaSuave;
   }
 
+  // Nivel del micro (RMS 0..1) o null si no hay micro. Es lo que llega DESPUES de la cancelacion de eco del
+  // navegador, o sea: la voz de la gente mas lo poco de musica que se cuele.
+  function nivelMic() {
+    if (!analizadorMic || actx?.state !== 'running') return null;
+    analizadorMic.getFloatTimeDomainData(datosMic);
+    let suma = 0;
+    for (let i = 0; i < datosMic.length; i++) suma += datosMic[i] * datosMic[i];
+    return Math.sqrt(suma / datosMic.length);
+  }
+
   return {
     tick,
+    nivelMic,
     agregarMic,
     desbloquear,
     streamGrabacion: () => salidaGrab?.stream || null,

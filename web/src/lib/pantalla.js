@@ -10,6 +10,7 @@
 import { conectar, SOCKET_URL } from './socket.js';
 import { parsearLRC, indiceActual, tiemposPalabras } from './lrc.js';
 import { crearReloj, desfaseParaAlinear } from './reloj.js';
+import { crearDetectorVoz, crearAliento } from './voz.js';
 import { crearPrecarga } from './precarga.js';
 import { cargarApiYouTube, crearReproductorYouTube, ESTADO as YT_ESTADO } from './youtube.js';
 import { logAudio, logCancion, errorAudio, diagnostico } from './audioLog.js';
@@ -116,6 +117,62 @@ const precarga = crearPrecarga({
   },
 });
 const grabacion = crearGrabacion();
+
+// ---- ¿Se esta cantando? (microfono) y aliento cuando no -------------------------------------
+// El micro mide el nivel de sonido; el detector aprende el ruido de la sala y dice si hay voz. Mientras la
+// letra pide cantar y hay silencio, se alienta en pantalla y en el celu de quien canta. La voz tambien cuenta
+// como "hay alguien": quien canta fuera de cuadro no corta la cancion por falta de persona en la camara.
+const detectorVoz = crearDetectorVoz();
+const aliento = crearAliento();
+let alientoTimer = null;
+setInterval(() => {
+  const nivel = audioBus.nivelMic();
+  if (nivel === null) return;
+  const t = performance.now();
+  detectorVoz.muestra(nivel, t);
+  const canta = detectorVoz.cantando(t);
+  body.dataset.voz = canta ? 'si' : 'no'; // el microfono "late" cuando se escucha una voz
+  if (canta && etapaActual === 'PLAYING' && !espejo && t - ultimaPresenciaVoz > 1000) {
+    ultimaPresenciaVoz = t;
+    socket.emit('pantalla:presencia', { hay: true });
+  }
+}, 50);
+let ultimaPresenciaVoz = 0;
+
+function mostrarAliento({ tipo, texto }) {
+  const el = $('#aliento');
+  el.textContent = texto;
+  el.className = tipo === 'bien' ? 'bien' : '';
+  el.hidden = false;
+  void el.offsetWidth; // reinicia la animacion
+  el.classList.add('entra');
+  clearTimeout(alientoTimer);
+  alientoTimer = setTimeout(() => { el.hidden = true; }, tipo === 'bien' ? 3000 : 5500);
+  if (!espejo) socket.emit('pantalla:aliento', { mensaje: texto, tipo });
+}
+function ocultarAliento() {
+  clearTimeout(alientoTimer);
+  const el = $('#aliento');
+  if (el) el.hidden = true;
+}
+// se llama desde tickLetra (cada 60 ms): decide si toca alentar
+function pensarAliento(base, tLetra) {
+  const linea = idxLetra >= 0 ? letras[idxLetra] : null;
+  // la letra "pide cantar" si hay una linea con texto en curso (no un instrumental largo)
+  const cantable = !!(linea?.texto && tLetra - linea.tiempo < 12);
+  const t = performance.now();
+  const r = aliento.tick({
+    ahora: t,
+    enCancion: etapaActual === 'PLAYING' && !espejo,
+    cantable,
+    micVivo: micOk !== false && detectorVoz.vivo(t),
+    silencioMs: detectorVoz.silencioMs(t),
+    cancionMs: base * 1000,
+    nombre: snap?.actual?.nombre || '',
+  });
+  if (r?.accion === 'mostrar') mostrarAliento(r);
+  else if (r?.accion === 'ocultar') ocultarAliento();
+}
 
 // canvas 1280x720 que se GRABA: camara + letra + marca de agua
 let letraRec = { texto: '', hechas: 0, titulo: '' };
@@ -587,6 +644,8 @@ async function arrancarCancion(actual) {
   barraFill.style.width = '0%';
   retos.reset();
   palabraEstado = null;
+  detectorVoz.reiniciar(performance.now()); // el silencio se cuenta desde que empieza ESTA cancion
+  aliento.reiniciar();
   totales = { corazon: 0, fuego: 0, aplauso: 0 };
   letraRec = { texto: '', hechas: 0, titulo: meta?.titulo || '' };
   // graba el canvas compuesto (camara + letra) + audio (cancion + voz)
@@ -700,6 +759,7 @@ function tickLetra() {
   // los retos usan el MISMO reloj que la letra (segundos de audio), no uno propio
   const hayManos = manosDisponibles();
   retos.tick(base, hayManos ? datosManos : null, { hayManos });
+  pensarAliento(base, t);
 }
 
 // La prueba de que la musica SUENA: el analizador esta en el mismo grafo que los parlantes.
@@ -985,6 +1045,9 @@ function detenerCancion() {
   } catch {}
   yt?.detener();
   avisoSync.hidden = true;
+  aliento.reiniciar();
+  ocultarAliento();
+  delete body.dataset.voz;
   delete body.dataset.yt;
   fuenteActiva = audio;
 }

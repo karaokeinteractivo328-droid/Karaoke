@@ -833,3 +833,33 @@ body[data-yt="chico"] #ytWrap {
   pointer-events: none;
 }
 #avisoSync[hidden] { display: none; }
+
+/* ---- aliento: nadie canta y la letra pide cantar ---- */
+#aliento {
+  position: fixed;
+  left: 50%;
+  bottom: 22vmin;
+  transform: translateX(-50%);
+  z-index: 11;
+  margin: 0;
+  max-width: 88vw;
+  padding: 0.7rem 1.8rem;
+  border-radius: 999px;
+  background: var(--rosa-hot);
+  color: #fff;
+  border: 3px solid var(--tinta);
+  box-shadow: 6px 6px 0 var(--tinta);
+  font-family: var(--fat);
+  text-transform: uppercase;
+  font-size: clamp(1.2rem, 4.2vmin, 2.8rem);
+  text-align: center;
+  pointer-events: none;
+}
+#aliento[hidden] { display: none; }
+#aliento.bien { background: #1f9d55; }
+#aliento.entra { animation: alientoPop 0.45s cubic-bezier(0.2, 1.6, 0.4, 1); }
+@keyframes alientoPop { from { opacity: 0; transform: translateX(-50%) scale(0.6) rotate(-4deg); } to { opacity: 1; transform: translateX(-50%) scale(1) rotate(-1deg); } }
+/* el microfono de la pildora del cantante late cuando se escucha su voz */
+#micPulso { display: inline-block; }
+body[data-voz="si"] #micPulso { animation: micLate 0.45s ease-in-out infinite alternate; filter: drop-shadow(0 0 6px var(--rosa-hot)); }
+@keyframes micLate { from { transform: scale(1); } to { transform: scale(1.35); } }

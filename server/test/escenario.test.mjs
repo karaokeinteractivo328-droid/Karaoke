@@ -298,6 +298,21 @@ test('sincronizar la letra en vivo: solo el que canta o su copiloto, y solo mien
   assert.equal(m.e.puedeSincronizarLetra(a), false, 'despues de cantar ya no');
 });
 
+test('aliento: le llega al que canta y a su copiloto, solo mientras suena (no al publico ni fuera de la cancion)', () => {
+  const m = mundo();
+  const a = m.persona(1, 'A');
+  const x = m.persona(2, 'X'); // copiloto
+  const otro = m.persona(3, 'Otro');
+  m.e.entrarFila(a);
+  m.e.unirseCopiloto(x, m.e.yo(a).codigoCopiloto);
+  assert.deepEqual(m.e.destinatariosAliento(), [], 'todavia no se canta');
+  aEscenario(m, a);
+  assert.deepEqual(m.e.destinatariosAliento().sort(), [a, x].sort(), 'el cantante y su copiloto');
+  assert.ok(!m.e.destinatariosAliento().includes(otro));
+  m.e.pantallaFin({ progreso: 1 });
+  assert.deepEqual(m.e.destinatariosAliento(), [], 'despues de cantar ya no');
+});
+
 test('server reiniciado: el celu se re-anota solo con su cancion guardada', () => {
   const m = mundo();
   const token = tk(7);

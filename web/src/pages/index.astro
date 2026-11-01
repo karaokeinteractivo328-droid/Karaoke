@@ -48,7 +48,7 @@ import Base from '../layouts/Base.astro';
   <div id="reacciones-vuelan"></div>
 
   <!-- quién canta ahora + reacciones (solo durante la performance) -->
-  <div id="cantandoAhora" hidden>🎤 <span id="cantandoNombre"></span><span id="reaccionesContador" hidden></span></div>
+  <div id="cantandoAhora" hidden><span id="micPulso">🎤</span> <span id="cantandoNombre"></span><span id="reaccionesContador" hidden></span></div>
 
   <!-- el único dato de la fila que vive en la pantalla grande -->
   <div id="siguiente" hidden>
@@ -114,6 +114,8 @@ import Base from '../layouts/Base.astro';
   </section>
   <div id="progreso" hidden><span></span></div>
   <p id="avisoSync" hidden></p>
+  <!-- aliento: aparece si nadie esta cantando mientras la letra pide cantar -->
+  <p id="aliento" hidden></p>
 
   <!-- RESULT -->
   <section class="ui" data-estado="RESULT">

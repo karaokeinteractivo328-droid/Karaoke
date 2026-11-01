@@ -98,6 +98,13 @@ socket.on('reto:resultado', (r) => {
   if (r.acierto) vibrar([60, 40, 60]);
   renderReto();
 });
+// la pantalla no escucha que cantes: te alienta (aviso + vibracion)
+socket.on('aliento', ({ mensaje, tipo } = {}) => {
+  if (!mensaje) return;
+  vibrar(tipo === 'bien' ? [40] : [90, 60, 90]);
+  mostrarAviso(mensaje, tipo === 'bien' ? 2500 : 4500);
+});
+
 socket.on('letra', (l) => {
   letra = l || { actual: '', siguiente: '' };
   pintarLetra();

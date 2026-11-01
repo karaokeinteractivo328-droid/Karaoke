@@ -61,7 +61,7 @@ npm run dev
 
 ```bash
 npm -w server test                  # 133 casos con reloj falso: fila, audio, catálogo, retos, palabra
-npm -w web test                     # 93 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
+npm -w web test                     # 112 casos: tracking, gestos, retos, reloj, precarga, buscador y reproductor de YouTube
 npm -w server run test:integracion  # sockets REALES (3 suites, ver abajo)
 ```
 
@@ -346,6 +346,22 @@ MediaPipe suele repetir la etiqueta, así que las dos compartían filtro y se me
 Si la cámara anda pero MediaPipe no carga (antes era **silencioso** y los retos con manos
 simplemente no aparecían), ahora sale un chip 🖐️ y el escenario lo trata como cámara
 caída: los retos con gestos se saltean y el reto de la palabra sigue funcionando.
+
+### ¿Se está cantando? Reconocer la voz y alentar
+
+La pantalla escucha el **micrófono** ([voz.js](web/src/lib/voz.js)) y sabe si alguien está cantando:
+
+- **Detector de voz**: mide el nivel de sonido del micro varias veces por segundo y **aprende el ruido de la sala** (lo que se
+  filtre de la música, el aire acondicionado…): la voz tiene que estar claramente por encima y sostenerse ~0,25 s (un golpe suelto
+  o la música sola no cuentan). Cantar con pausas para respirar sigue contando como cantar.
+- **Se ve**: el 🎤 de la píldora del cantante **late** mientras se escucha su voz.
+- **Aliento**: si la letra pide cantar (hay una línea en curso, no un instrumental) y pasan **7 s seguidos sin voz**, aparece abajo un
+  mensaje ("¡Dale Ana, cantá! 🎤", "¡Animate, que la letra es tuya! ✨", "¡Vos podés, cantá fuerte! 💪"…) y el **celu de quien canta
+  (y su copiloto) recibe el mismo aviso con vibración**. No insiste: como mucho uno cada 14 s, con mensajes distintos, no en los primeros
+  8 s de la canción, y **se celebra** cuando la voz vuelve ("¡Así se canta! 🔥").
+- **Presencia**: la voz también cuenta como "hay alguien", así que quien canta **fuera de cuadro** no corta la canción por el
+  corte de "nadie en cámara" (45 s).
+- Sin micrófono (chip "sin mic") no se alienta: si no se puede escuchar, no se sabe si canta.
 
 ### Retos durante la canción
 
