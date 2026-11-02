@@ -299,6 +299,22 @@ test('en una cancion de 3:30 hay retos seguidos durante TODA la cancion (no uno 
   assert.ok(hechos >= 7, `se cumplieron ${hechos} retos en una sola cancion`);
 });
 
+test('necesitaManos: solo con un reto en curso o a punto de aparecer (unos segundos antes); el resto del tiempo, apagado', () => {
+  const { r } = montar({ conPalabra: false });
+  const primero = r.plan[0].at;
+  assert.equal(r.necesitaManos(0), false, 'al comienzo no hay nada que hacer con las manos');
+  assert.equal(r.necesitaManos(primero - 6), false, 'todavia falta mucho');
+  assert.equal(r.necesitaManos(primero - 3.5), true, 'faltan menos de 4 s: se enciende para que ya este andando');
+  r.tick(primero, DATOS_VACIOS);
+  assert.ok(r.activo, 'el reto esta en curso');
+  assert.equal(r.necesitaManos(primero + 1), true);
+  correr(r, primero, primero + 9, { ...DATOS_VACIOS, unaArriba: true, dosArriba: true, saludo: true, corazon: true });
+  assert.equal(r.activo, null);
+  const entre = (primero + r.plan[1].at) / 2;
+  assert.equal(r.necesitaManos(entre), r.plan[1].at - entre <= 4, 'entre dos retos se apaga (salvo que el siguiente este por llegar)');
+  assert.equal(r.necesitaManos(r.plan.at(-1).at + 60), false, 'terminados todos, apagado');
+});
+
 test('palabra: sin respuesta, se cierra por tiempo y avisa al server', () => {
   const { r, log } = montar({ palabra: () => ({ id: 'w2', hasta: 0, opciones: ['a1', 'b2', 'c3'] }) });
   const it = r.plan.find((p) => p.tipo === 'palabra');

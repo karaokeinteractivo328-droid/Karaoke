@@ -249,6 +249,14 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
     onCartel?.(cartel(t));
   }
 
+  // ¿hay que tener el reconocimiento de MANOS encendido? Si: hay un reto en curso, o el proximo arranca en menos de
+  // `anticipo` segundos (se enciende un poco antes para que MediaPipe ya este andando cuando aparece el cartel).
+  // Fuera de eso las manos no se usan y no hace falta gastar la compu en detectarlas.
+  function necesitaManos(t, anticipo = 4) {
+    if (activo) return true;
+    return plan.some((p) => p.estado === 'pendiente' && t >= p.at - anticipo && t <= p.at + 14) // (pasados 12 s el reto se saltea o se reprograma);
+  }
+
   // el server resolvio el reto de la palabra (acierto, error o tiempo)
   function resolverPalabra({ id, acierto, timeout, palabra, puntos }) {
     if (!activo || activo.reto.tipo !== 'palabra' || activo.id !== id) return false;
@@ -267,6 +275,7 @@ export function crearRetos({ onCartel, onCumplido, onResultado, onPalabra, onPal
     reset,
     planificar,
     tick,
+    necesitaManos,
     resolverPalabra,
     cancelarPalabra,
     get plan() { return plan; },

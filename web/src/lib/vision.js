@@ -47,11 +47,29 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
   let proximaDeteccion = 0;
   let costoDeteccion = 0; // ms que tarda una deteccion (media movil)
   let ritmoMinMs = 0; // separacion minima entre detecciones (se sube cuando nadie usa las manos)
+  let manosActivas = true; // las manos solo se detectan cuando hay un reto que las usa (ver setManos)
+  const RITMO_CARA_SOLA_MS = 1000; // sin manos, solo se mira si hay alguien (presencia / salud de la camara) 1 vez por segundo
   let factorCosto = 1; // tras cada deteccion se espera `factor` x lo que tardo (1 = hasta la mitad del tiempo; 2,5 = ~30 %)
 
   // Se despierta SOLO cuando la camara entrega un cuadro nuevo (30/s) en vez de en cada vuelta de la
   // pantalla (60/s): la mitad de despertares inutiles. Si el navegador no sabe, vuelve al metodo de antes.
-  const proximoCuadro = (f) => (video.requestVideoFrameCallback ? video.requestVideoFrameCallback(() => f()) : requestAnimationFrame(f));
+  // Con las manos encendidas el bucle se pega a los cuadros de la camara; apagadas, se despierta 4 veces por segundo.
+  // Siempre hay UN solo despertador pendiente (al cambiar de ritmo se cancela el anterior).
+  let cancelar = () => {};
+  function programar() {
+    cancelar();
+    if (!corriendo) return;
+    if (!manosActivas) {
+      const id = setTimeout(loop, 250);
+      cancelar = () => clearTimeout(id);
+    } else if (video.requestVideoFrameCallback) {
+      const id = video.requestVideoFrameCallback(() => loop());
+      cancelar = () => video.cancelVideoFrameCallback?.(id);
+    } else {
+      const id = requestAnimationFrame(loop);
+      cancelar = () => cancelAnimationFrame(id);
+    }
+  }
 
   function loop() {
     if (!corriendo) return;
@@ -63,21 +81,25 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
       // la mitad del tiempo: el hilo principal tambien dibuja la pantalla y GRABA el video,
       // y si MediaPipe se lo come todo el video sale a 3 cuadros por segundo.
       if (ts < proximaDeteccion) {
-        proximoCuadro(loop);
+        programar();
         return;
       }
       let manosRes;
-      try {
-        manosRes = handLandmarker.detectForVideo(video, ts);
-      } catch (err) {
-        console.warn('[vision] manos:', err.message);
+      if (manosActivas) {
+        try {
+          manosRes = handLandmarker.detectForVideo(video, ts);
+        } catch (err) {
+          console.warn('[vision] manos:', err.message);
+        }
+        const costo = performance.now() - ts;
+        costoDeteccion = costoDeteccion ? costoDeteccion * 0.8 + costo * 0.2 : costo;
+        proximaDeteccion = ts + Math.max(ritmoMinMs, Math.min(500, costoDeteccion * factorCosto));
+      } else {
+        proximaDeteccion = ts + RITMO_CARA_SOLA_MS;
       }
-      const costo = performance.now() - ts;
-      costoDeteccion = costoDeteccion ? costoDeteccion * 0.8 + costo * 0.2 : costo;
-      proximaDeteccion = ts + Math.max(ritmoMinMs, Math.min(500, costoDeteccion * factorCosto));
 
-      if (faceDetector && ts >= proximaCara) {
-        proximaCara = ts + Math.max(350, ritmoMinMs);
+      if (faceDetector && (ts >= proximaCara || !manosActivas)) {
+        proximaCara = ts + Math.max(manosActivas ? 350 : RITMO_CARA_SOLA_MS, ritmoMinMs);
         try {
           const f = faceDetector.detectForVideo(video, ts);
           hayPersona = (f?.detections?.length || 0) > 0;
@@ -102,21 +124,33 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
         detecciones,
         hayPersona: hayPersona || detecciones.length > 0,
         cara: ts - caraVistaT < 1500 ? cara : null,
+        manos: manosActivas,
         ts,
       });
     }
-    proximoCuadro(loop);
+    programar();
   }
-  proximoCuadro(loop);
+  programar();
 
   return {
     // `ms` = cada cuanto detectar como minimo (0 = lo mas rapido que se pueda). Cuando nadie usa las manos
     // (esperando / resultado) alcanza con unas pocas detecciones por segundo.
     setRitmo: (ms = 0) => { ritmoMinMs = Math.max(0, Number(ms) || 0); },
+    // Enciende / apaga el reconocimiento de MANOS (lo mas pesado). Apagado queda solo la cara, 1 vez por segundo.
+    setManos: (si) => {
+      // sin detector de caras no hay otra forma de saber si hay alguien en cuadro: las manos quedan siempre encendidas
+      const nuevo = !!si || !faceDetector;
+      if (nuevo === manosActivas) return;
+      manosActivas = nuevo;
+      proximaDeteccion = 0; // al encender, detecta enseguida
+      programar(); // cambia de ritmo: pegado a los cuadros de la camara (manos) o 4 veces por segundo (solo cara)
+    },
+    get manosActivas() { return manosActivas; },
     // modo liviano: la deteccion usa menos tiempo de la compu (las manos se actualizan menos seguido)
     setFactor: (f = 1) => { factorCosto = Math.max(1, Number(f) || 1); },
     detener: () => {
       corriendo = false;
+      cancelar();
       handLandmarker.close?.();
       faceDetector?.close?.();
     },

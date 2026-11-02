@@ -149,6 +149,27 @@ let lineasSinVoz = 0; // lineas de letra que arrancaron desde la ultima vez que 
 // resultado (nadie hace gestos) alcanza con detectar unas pocas veces por segundo. Siempre queda un resultado
 // reciente (cada <1 s), asi la presencia y la salud del tracking siguen funcionando.
 let visionCtl = null;
+// Las MANOS (lo mas pesado de MediaPipe) solo se detectan, y el esqueleto solo se dibuja, cuando hay un reto que las
+// usa: mientras corre uno, y unos segundos antes de que aparezca el cartel. El resto del tiempo solo se mira la cara
+// (1 vez por segundo) para saber si hay alguien en cuadro.
+const ANTICIPO_MANOS_S = 4; // se encienden este rato antes del reto (MediaPipe necesita unos cuadros para enganchar)
+const COLA_MANOS_MS = 1500; // y se mantienen un poco despues de terminar (feedback del ultimo gesto)
+let manosActivas = false; // arranca apagado (visionCtl.setManos lo sincroniza al cargar)
+body.dataset.manos = 'no';
+let manosHasta = 0;
+function actualizarManos(base) {
+  const ahora = performance.now();
+  if (etapaActual === 'PLAYING' && retos.necesitaManos(base, ANTICIPO_MANOS_S)) manosHasta = ahora + COLA_MANOS_MS;
+  const quiero = ahora < manosHasta;
+  if (quiero === manosActivas) return;
+  manosActivas = quiero;
+  body.dataset.manos = quiero ? 'si' : 'no'; // (solo para ver/depurar: el reconocimiento de manos esta encendido o no)
+  visionCtl?.setManos(quiero);
+  if (!quiero && datosManos) { // se apaga: no queda el esqueleto ni el efecto de manos en pantalla
+    datosManos = null;
+    fondo.setModo('');
+  }
+}
 function ajustarRitmoDeteccion() {
   visionCtl?.setRitmo(etapaActual === 'STANDBY' || etapaActual === 'RESULT' ? 500 : 0);
   visionCtl?.setFactor(vigilante.liviano ? 2.5 : 1);
@@ -315,7 +336,7 @@ pedirMedios()
         const t = performance.now();
         deteccion = 'ok';
         ultimoFrameManos = t;
-        gestos({ manos: seguimiento.actualizar(detecciones, t), cara, ts: t });
+        if (manosActivas || detecciones.length) gestos({ manos: seguimiento.actualizar(detecciones, t), cara, ts: t });
         if (!espejo && t - ultimaPresenciaEmit > 1000) {
           ultimaPresenciaEmit = t;
           socket.emit('pantalla:presencia', { hay: !!hayPersona });
@@ -323,6 +344,7 @@ pedirMedios()
       },
     }).then((ctl) => {
       visionCtl = ctl;
+      visionCtl.setManos(manosActivas);
       ajustarRitmoDeteccion();
       return ctl;
     }).catch((err) => {
@@ -411,7 +433,7 @@ socket.on('estado', (s) => {
   offsetServidor = s.serverNow - Date.now();
   const cambio = s.etapa !== etapaPrevia;
   etapaActual = s.etapa;
-  if (cambio) ajustarRitmoDeteccion();
+  if (cambio) { ajustarRitmoDeteccion(); actualizarManos(0); }
   modoActual = s.actual?.modo || 'solo';
   body.dataset.estado = s.etapa;
   body.dataset.modo = modoActual;
@@ -843,6 +865,7 @@ function tickLetra() {
   const hayManos = manosDisponibles();
   retos.tick(base, hayManos ? datosManos : null, { hayManos });
   pensarAliento(base, t);
+  actualizarManos(base);
 }
 
 // La prueba de que la musica SUENA: el analizador esta en el mismo grafo que los parlantes.

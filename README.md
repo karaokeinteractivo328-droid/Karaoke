@@ -365,6 +365,15 @@ La pantalla escucha el **micrófono** ([voz.js](web/src/lib/voz.js)) y sabe si a
 - **Cómo distingue la voz**: mide el volumen **solo en la banda de la voz (200–3400 Hz)**, así un golpe o un zumbido grave no cuentan; usa un **segundo micrófono sin control automático de ganancia** (el del navegador sube el volumen en el silencio y lo baja apenas alguien canta); **calibra con la música**: durante los primeros segundos de la canción lo que se cuela por el micro se toma como ruido de fondo.
 - **Cuándo alienta**: silencio de 8 s seguidos mientras la letra pide cantar, **con al menos 2 líneas de letra sin voz** (un instrumental no cuenta), no en los primeros 10 s ni en los últimos 10 s, y como mucho cada 18 s.
 
+### Reconocimiento de manos solo cuando hace falta
+
+Detectar manos es lo más pesado de MediaPipe, y dibujar el esqueleto sobre la cámara también. Por eso **solo se enciende cuando hay un
+reto que usa las manos**: [retos.js](web/src/lib/retos.js) (`necesitaManos`) avisa cuando hay un reto en curso o el próximo arranca en
+menos de **4 s** (así MediaPipe ya está andando cuando aparece el cartel), y se mantiene **1,5 s** después de terminar. El resto del
+tiempo (espera, resultado, entre retos) no se detectan manos ni se dibuja el esqueleto: queda solo el detector de caras, **1 vez por
+segundo**, para saber si hay alguien en cuadro y que la salud de la cámara siga funcionando. Si el detector de caras no carga, las manos
+quedan encendidas siempre (no habría otra forma de saber si hay alguien). Se puede ver el estado en `body[data-manos]`.
+
 ### Retos durante la canción
 
 [retos.js](web/src/lib/retos.js) arma, para cada performance, un **plan de retos: uno cada ~20 s**
