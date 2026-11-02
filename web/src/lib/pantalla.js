@@ -542,22 +542,50 @@ setInterval(() => {
 socket.on('reaccion', ({ tipo, nombre, totales: t }) => {
   if (t) totales = t;
   volarReaccion(EMOJI[tipo] || '❤️', nombre);
-  if (etapaActual === 'PLAYING') pintarContador();
+  pedirContador();
 });
 
+// Con muchos celus mandando reacciones a la vez NO se crea un elemento por cada una (eso trababa la pantalla):
+// entran a una cola que se vacia de a pocos, con tope de emojis en el aire (menos en modo liviano) y el contador se
+// actualiza a lo sumo 4 veces por segundo.
+const reaccionesEnCola = [];
+let reaccionesEnAire = 0;
+let drenandoReacciones = false;
+let contadorPedido = false;
+function pedirContador() {
+  if (contadorPedido || etapaActual !== 'PLAYING') return;
+  contadorPedido = true;
+  setTimeout(() => { contadorPedido = false; if (etapaActual === 'PLAYING') pintarContador(); }, 250);
+}
 function volarReaccion(emoji, nombre) {
-  const cont = $('#reacciones-vuelan');
-  if (cont.children.length > 24) return; // el escenario nunca se inunda
-  const span = document.createElement('span');
-  span.className = 'reaccionVolando';
-  const x = 8 + Math.random() * 84; // % del ancho
-  const dur = 2.6 + Math.random() * 1.4;
-  span.style.left = x + 'vw';
-  span.style.setProperty('--dur', dur + 's');
-  span.style.setProperty('--drift', (Math.random() * 2 - 1).toFixed(2));
-  span.innerHTML = `<b>${emoji}</b>${nombre ? `<small>${escapeHtml(nombre)}</small>` : ''}`;
-  cont.appendChild(span);
-  setTimeout(() => span.remove(), dur * 1000 + 200);
+  if (document.hidden) return;
+  if (reaccionesEnCola.length >= 16) reaccionesEnCola.shift(); // las mas viejas se descartan: el escenario nunca se inunda
+  reaccionesEnCola.push({ emoji, nombre });
+  if (!drenandoReacciones) {
+    drenandoReacciones = true;
+    setTimeout(drenarReacciones, 0);
+  }
+}
+function drenarReacciones() {
+  const tope = body.dataset.rendimiento === 'bajo' ? 6 : 12;
+  if (reaccionesEnCola.length && reaccionesEnAire < tope) {
+    const { emoji, nombre } = reaccionesEnCola.shift();
+    const cont = $('#reacciones-vuelan');
+    const span = document.createElement('span');
+    span.className = 'reaccionVolando';
+    const dur = 2.6 + Math.random() * 1.4;
+    span.style.left = 8 + Math.random() * 84 + 'vw'; // % del ancho
+    span.style.setProperty('--dur', dur + 's');
+    span.style.setProperty('--drift', (Math.random() * 2 - 1).toFixed(2));
+    // el nombre solo se muestra cuando hay pocos en el aire (con muchos es ruido y cuesta dibujarlo)
+    span.innerHTML = `<b>${emoji}</b>${nombre && reaccionesEnAire < 4 ? `<small>${escapeHtml(nombre)}</small>` : ''}`;
+    reaccionesEnAire++;
+    const quitar = () => { span.remove(); reaccionesEnAire = Math.max(0, reaccionesEnAire - 1); };
+    span.addEventListener('animationend', quitar, { once: true });
+    cont.appendChild(span);
+  }
+  if (reaccionesEnCola.length) setTimeout(drenarReacciones, 110); // a lo sumo ~9 por segundo
+  else drenandoReacciones = false;
 }
 
 // --- PLAYING: audio + letra + retos --------------------------
@@ -1000,11 +1028,11 @@ const mezclado = (a) => a.map((x) => [Math.random(), x]).sort((p, q) => p[0] - q
 function prepararPalabra(tAudio) {
   if (espejo || palabraTapada || palabraEstado || !socket.connected) return null;
   const t = reloj.letra(offsetLetra); // tiempo de letra (el mismo que usa la pantalla)
-  // la palabra tiene que llegar con tiempo para contestar (2.6 s a 12 s). Las lineas de 3-4 s casi nunca
+  // la palabra tiene que llegar con tiempo de sobra para contestar (5 s a 16 s). Las lineas de 3-4 s casi nunca
   // tienen una asi dentro de la linea actual: entonces se tapa una de la linea siguiente, que ya se ve abajo.
   const candidatas = (lista, linea) => lista
     .map((p, k) => ({ ...p, k, linea, lista, txt: limpiar(p.span.textContent) }))
-    .filter((p) => p.t0 - t >= 2.6 && p.t0 - t <= 12 && p.txt.length >= 3);
+    .filter((p) => p.t0 - t >= 5 && p.t0 - t <= 16 && p.txt.length >= 3);
   let cand = candidatas(palabras, lineaRender);
   if (!cand.length && sigLinea >= 0) cand = candidatas(sigPalabras, sigLinea);
   if (!cand.length) return null;
@@ -1026,7 +1054,7 @@ function prepararPalabra(tAudio) {
   if (pool.length < 2) return null;
   pool.sort((a, b) => Math.abs(a.length - correcta.length) - Math.abs(b.length - correcta.length) || Math.random() - 0.5);
   const opciones = mezclado([correcta, pool[0], pool[1]]);
-  const dur = Math.min(10, Math.max(2.3, elegida.t0 - t - 0.3));
+  const dur = Math.min(14, Math.max(4.5, elegida.t0 - t - 0.3)); // tiempo para contestar: hasta que se canta esa palabra
   const id = Math.random().toString(36).slice(2, 8);
 
   // la frase TAPADA (con un hueco donde va la palabra): el celu la muestra junto a las opciones
