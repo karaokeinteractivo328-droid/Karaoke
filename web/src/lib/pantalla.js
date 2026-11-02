@@ -40,7 +40,9 @@ audio.crossOrigin = 'anonymous';
 const PID = crypto.randomUUID?.() || String(Math.random()).slice(2);
 const socket = conectar('pantalla', { pid: PID });
 
-const EMOJI = { corazon: '❤️', fuego: '🔥', aplauso: '👏' };
+const EMOJI = { corazon: '❤️', fuego: '🔥', aplauso: '👏', estrella: '⭐', baile: '💃', risa: '😂' };
+// "❤️ 3   🔥 2   👏 0": las tres de siempre y, si hubo, las demas
+const resumenReacciones = (r = {}) => Object.entries(EMOJI).filter(([k], i) => i < 3 || r[k] > 0).map(([k, e]) => `${e} ${r[k] || 0}`).join('   ');
 
 let snap = null;
 let etapaActual = 'STANDBY';
@@ -50,7 +52,7 @@ let offsetServidor = 0; // serverNow - Date.now(): para las barras de tiempo
 let espejo = false; // otra pantalla tomo el control: esta solo muestra
 let catalogoFull = [];
 let datosManos = null;
-let totales = { corazon: 0, fuego: 0, aplauso: 0 };
+let totales = {};
 const ahoraServidor = () => Date.now() + offsetServidor;
 
 // --- Datos de apoyo (siempre contra el backend, no contra el origen del front) ---
@@ -128,11 +130,12 @@ const aliento = crearAliento();
 let alientoTimer = null;
 setInterval(() => {
   if (etapaActual !== 'COUNTDOWN' && etapaActual !== 'PLAYING') return; // fuera de la cancion no hay nada que escuchar
-  const nivel = audioBus.nivelMic();
-  if (nivel === null) return;
+  const a = audioBus.analisisMic();
+  if (a === null) return;
   const t = performance.now();
-  detectorVoz.muestra(nivel, t);
+  detectorVoz.muestra(a.rms, t, a.proporcion);
   const canta = detectorVoz.cantando(t);
+  if (canta) lineasSinVoz = 0;
   body.dataset.voz = canta ? 'si' : 'no'; // el microfono "late" cuando se escucha una voz
   if (canta && etapaActual === 'PLAYING' && !espejo && t - ultimaPresenciaVoz > 1000) {
     ultimaPresenciaVoz = t;
@@ -140,6 +143,7 @@ setInterval(() => {
   }
 }, 50);
 let ultimaPresenciaVoz = 0;
+let lineasSinVoz = 0; // lineas de letra que arrancaron desde la ultima vez que se escucho una voz
 
 // Las manos solo se usan para los retos y el esqueleto que se ve en pantalla: mientras se espera o se muestra el
 // resultado (nadie hace gestos) alcanza con detectar unas pocas veces por segundo. Siempre queda un resultado
@@ -176,8 +180,11 @@ function pensarAliento(base, tLetra) {
     ahora: t,
     enCancion: etapaActual === 'PLAYING' && !espejo,
     cantable,
-    micVivo: micOk !== false && detectorVoz.vivo(t),
+    // sin micro, con el micro mudo, o antes de conocer el ruido de la sala, no se puede saber si canta: no se alienta
+    micVivo: micOk !== false && detectorVoz.vivo(t) && detectorVoz.listo(t),
     silencioMs: detectorVoz.silencioMs(t),
+    lineasSilencio: lineasSinVoz,
+    restanteMs: (duracionCancion - base) * 1000,
     cancionMs: base * 1000,
     nombre: snap?.actual?.nombre || '',
   });
@@ -282,11 +289,22 @@ async function pedirMedios() {
   }
 }
 
+// Micro SOLO para medir (ver audioBus.agregarMicAnalisis). Si no se puede, se mide con el principal.
+function pedirMicAnalisis() {
+  navigator.mediaDevices
+    .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } })
+    .then((s) => audioBus.agregarMicAnalisis(s))
+    .catch((e) => console.warn('[voz] micro de analisis no disponible, se usa el principal:', e?.message || e));
+}
+
 pedirMedios()
   .then((stream) => {
     camaraOk = stream.getVideoTracks().length > 0;
     micOk = stream.getAudioTracks().length > 0;
-    if (micOk) audioBus.agregarMic(stream); // la voz entra a la grabacion
+    if (micOk) {
+      audioBus.agregarMic(stream); // la voz entra a la grabacion
+      pedirMicAnalisis(); // y un segundo micro, sin control de ganancia, para medir si se canta
+    }
     audioBus.desbloquear(); // a veces el permiso ya cuenta como interaccion
     if (!camaraOk) return null;
     video.srcObject = stream;
@@ -487,7 +505,7 @@ function pintarContador() {
   const el = $('#reaccionesContador');
   const partes = Object.entries(totales)
     .filter(([, n]) => n > 0)
-    .map(([k, n]) => `${EMOJI[k]}${n}`);
+    .map(([k, n]) => `${EMOJI[k] || ''}${n}`);
   el.textContent = partes.join(' ');
   el.hidden = !partes.length;
 }
@@ -675,8 +693,9 @@ async function arrancarCancion(actual) {
   retos.reset();
   palabraEstado = null;
   detectorVoz.reiniciar(performance.now()); // el silencio se cuenta desde que empieza ESTA cancion
+  lineasSinVoz = 0;
   aliento.reiniciar();
-  totales = { corazon: 0, fuego: 0, aplauso: 0 };
+  totales = {};
   letraRec = { texto: '', hechas: 0, titulo: meta?.titulo || '' };
   // graba el canvas compuesto (camara + letra) + audio (cancion + voz)
   grabacion.iniciar(recCanvas.stream(30), audioBus.streamGrabacion());
@@ -776,6 +795,7 @@ const relojBase = () => reloj.base();
 function tickLetra() {
   const base = reloj.base(); // segundos de audio (progreso y retos)
   const t = reloj.letra(offsetLetra); // tiempo de letra (audio - offset - latencia)
+  if (base < 3.5) detectorVoz.calibrar(700); // la musica recien arranca: lo que se cuela por el micro es ruido, no voz
   // la barra se mueve con `transform` (no recalcula la pagina) y solo si avanzo al menos 0,1 %
   const avance = Math.round(Math.max(0, Math.min(1, base / duracionCancion)) * 1000) / 1000;
   if (avance !== progresoMostrado) {
@@ -787,6 +807,7 @@ function tickLetra() {
   if (nuevo !== idxLetra) {
     idxLetra = nuevo;
     mostrarLinea(nuevo);
+    if (letras[nuevo]?.texto) lineasSinVoz++;
   }
   pintarPalabras(t);
   verificarSonido(base);
@@ -1163,8 +1184,7 @@ async function mostrarResultado(s) {
   }, 25);
   const d = r?.desglose || { cancion: 0, retos: 0, publico: 0 };
   $('#desglose').textContent = `Canción ${d.cancion} · Retos ${d.retos} · Público ${d.publico}`;
-  const re = r?.reacciones || { corazon: 0, fuego: 0, aplauso: 0 };
-  $('#resumenReacciones').textContent = `❤️ ${re.corazon}   🔥 ${re.fuego}   👏 ${re.aplauso}`;
+  $('#resumenReacciones').textContent = resumenReacciones(r?.reacciones);
 
   // QR de descarga (link privado de esta performance); el cantante tambien lo
   // recibe en su celu, el QR es solo una comodidad.

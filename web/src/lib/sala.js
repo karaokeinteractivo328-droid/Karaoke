@@ -24,7 +24,7 @@ $('inNombre').value = nombre;
 let est = null; // snapshot publico
 let yo = null; // lo mio
 let ajusteReloj = 0; // serverNow - Date.now()
-let totales = { corazon: 0, fuego: 0, aplauso: 0 };
+let totales = {};
 let letra = { actual: '', siguiente: '' };
 let yoReal = null; // lo que dice el server (yo puede tener cambios optimistas hasta que llegue lo real)
 let resultados = { q: '', items: [], estado: 'cargando', error: null, errorCodigo: null, hayMas: false, remoto: true, cargandoMas: false };
@@ -41,7 +41,12 @@ const REACC = [
   { tipo: 'corazon', emoji: '❤️' },
   { tipo: 'fuego', emoji: '🔥' },
   { tipo: 'aplauso', emoji: '👏' },
+  { tipo: 'estrella', emoji: '⭐' },
+  { tipo: 'baile', emoji: '💃' },
+  { tipo: 'risa', emoji: '😂' },
 ];
+// "❤️ 3   🔥 2   👏 0": las tres de siempre y, si hubo, las demas
+const resumenReacciones = (r = {}) => REACC.filter((x, i) => i < 3 || r[x.tipo] > 0).map((x) => `${x.emoji} ${r[x.tipo] || 0}`).join('   ');
 
 // ------------------------------------------------------------------- socket
 function intencion() {
@@ -65,7 +70,7 @@ socket.on('connect_error', () => { $('sinConexion').hidden = false; });
 socket.on('estado', (s) => {
   est = s;
   ajusteReloj = s.serverNow - Date.now();
-  totales = { corazon: 0, fuego: 0, aplauso: 0, ...(s.reacciones || {}) };
+  totales = { ...(s.reacciones || {}) };
   if (s.etapa !== 'PLAYING') letra = { actual: '', siguiente: '' };
   render();
 });
@@ -322,7 +327,7 @@ function renderCantando() {
 }
 
 function pintarContadores() {
-  $('cantaReacc').textContent = `❤️ ${totales.corazon || 0}   🔥 ${totales.fuego || 0}   👏 ${totales.aplauso || 0}`;
+  $('cantaReacc').textContent = resumenReacciones(totales);
 }
 
 // En un dueto cada linea es de una voz: la 1 es de quien canta y la 2 de su companero
@@ -360,7 +365,7 @@ function renderResultado() {
   const d = r.desglose || {};
   $('resDesglose').textContent = `Canción ${d.cancion ?? 0} · Retos ${d.retos ?? 0} · Público ${d.publico ?? 0}`;
   const x = r.reacciones || {};
-  $('resReacc').textContent = `❤️ ${x.corazon || 0}   🔥 ${x.fuego || 0}   👏 ${x.aplauso || 0}`;
+  $('resReacc').textContent = resumenReacciones(x);
   pintarVideo();
 }
 

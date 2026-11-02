@@ -100,6 +100,9 @@ const reaccionesAEmoji = (r = {}) => ({
   '❤️': r.corazon || 0,
   '🔥': r.fuego || 0,
   '👏': r.aplauso || 0,
+  '⭐': r.estrella || 0,
+  '😂': r.risa || 0,
+  '💃': r.baile || 0,
 });
 
 const escenario = crearEscenario({

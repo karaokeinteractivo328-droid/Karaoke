@@ -1,6 +1,6 @@
 // Retos con las manos durante la cancion.
 //
-// - PLANIFICADOS: cada performance tiene un plan de retos (uno cada ~30 s: entre 3 y 7 segun lo que
+// - PLANIFICADOS: cada performance tiene un plan de retos (uno cada ~20 s: entre 5 y 12 segun lo que
 //   dure la cancion), cada uno atado a un instante de la cancion (en segundos de AUDIO, el mismo
 //   reloj que usa la letra) y alineado al comienzo de una linea de letra. No
 //   aparecen al azar ni dependen de un temporizador propio que se desfase.
@@ -16,10 +16,12 @@
 
 export const PUNTOS_RETO = 10; // lo maximo que vale un reto (cuando hay pocos)
 export const PUNTOS_TOTAL_RETOS = 30; // el tope de retos del puntaje (Cancion 40 + Retos 30 + Publico 30)
-export const INTERVALO_RETOS_S = 30; // un reto cada ~30 s: seguido, pero sin abrumar (cada reto dura 7-10 s)
-export const MIN_RETOS = 3;
-export const MAX_RETOS = 7;
-export const PALABRAS_POR_CANCION = 3; // el reto de COMPLETAR LA PALABRA aparece 3 veces en TODAS las canciones con letra
+export const INTERVALO_RETOS_S = 20; // un reto cada ~20 s: se siente seguido, sin pisarse (cada reto dura 7-10 s)
+export const MIN_RETOS = 5;
+export const MAX_RETOS = 12;
+export const PALABRAS_POR_CANCION = 4; // minimo de retos de COMPLETAR LA PALABRA en TODAS las canciones con letra
+// cuantos de los `n` retos de la cancion son de completar la palabra: la mitad, y nunca menos de 4
+export const palabrasPorCancion = (n) => Math.min(n, Math.max(PALABRAS_POR_CANCION, Math.round(n / 2)));
 const REINTENTOS_PALABRA = 3; // si no hay una palabra para tapar en ese momento, se reintenta mas adelante
 export const RETOS_POR_CANCION = MIN_RETOS; // (compatibilidad: el minimo)
 
@@ -73,10 +75,10 @@ function mezclar(a, azar) {
   return r;
 }
 
-// Que tipo va en cada lugar del plan: SIEMPRE 3 de la palabra (si hay letra), repartidas parejo, y el resto,
+// Que tipo va en cada lugar del plan: la mitad (minimo 4) de la palabra (si hay letra), repartidas parejo, y el resto,
 // gestos variados (los primeros, faciles de entender) sin repetir el mismo dos veces seguidas.
 function asignarTipos(n, conPalabra, azar) {
-  const palabras = conPalabra ? Math.min(n, PALABRAS_POR_CANCION) : 0;
+  const palabras = conPalabra ? palabrasPorCancion(n) : 0;
   const lugaresPalabra = new Set();
   for (let j = 0; j < palabras; j++) lugaresPalabra.add(Math.min(n - 1, Math.floor(((j + 0.5) * n) / palabras)));
   const tipos = [];

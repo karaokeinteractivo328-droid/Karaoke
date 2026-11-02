@@ -23,7 +23,9 @@ export function crearAudioBus(audioEl) {
   let gananciaMusica = null;
   let gananciaVoz = null;
   let analizadorMic = null; // mide el nivel del micro (para saber si alguien canta)
+  let analizadorVoz = null; // idem, pero con un micro SIN control automatico de ganancia (mide mejor; si hay, se usa este)
   let datosMic = null;
+  let espectroMic = null;
   let energiaSuave = 0;
 
   if (AC) {
@@ -65,13 +67,36 @@ export function crearAudioBus(audioEl) {
     try {
       const m = actx.createMediaStreamSource(stream);
       m.connect(gananciaVoz); // el mic SOLO va a la grabación (no a los parlantes -> sin acople)
-      analizadorMic = actx.createAnalyser();
-      analizadorMic.fftSize = 1024;
-      datosMic = new Float32Array(analizadorMic.fftSize);
+      analizadorMic = crearAnalizador();
       m.connect(analizadorMic);
       micConectado = true;
     } catch (e) {
       console.warn('[audioBus] mic:', e.message);
+    }
+  }
+
+  function crearAnalizador() {
+    const a = actx.createAnalyser();
+    a.fftSize = 2048;
+    a.smoothingTimeConstant = 0.3;
+    datosMic ||= new Float32Array(a.fftSize);
+    espectroMic ||= new Float32Array(a.frequencyBinCount);
+    return a;
+  }
+
+  // Segundo micro solo para MEDIR (no va a la grabacion ni a los parlantes). El del navegador trae control
+  // automatico de ganancia: sube el volumen en el silencio y lo baja apenas alguien canta, y eso confunde al
+  // detector de voz. Este se pide sin ese control.
+  function agregarMicAnalisis(stream) {
+    if (!actx || analizadorVoz || !stream?.getAudioTracks?.().length) return false;
+    try {
+      const m = actx.createMediaStreamSource(stream);
+      analizadorVoz = crearAnalizador();
+      m.connect(analizadorVoz);
+      return true;
+    } catch (e) {
+      console.warn('[audioBus] mic de analisis:', e.message);
+      return false;
     }
   }
 
@@ -89,17 +114,38 @@ export function crearAudioBus(audioEl) {
   // Nivel del micro (RMS 0..1) o null si no hay micro. Es lo que llega DESPUES de la cancelacion de eco del
   // navegador, o sea: la voz de la gente mas lo poco de musica que se cuele.
   function nivelMic() {
-    if (!analizadorMic || actx?.state !== 'running') return null;
-    analizadorMic.getFloatTimeDomainData(datosMic);
+    return analisisMic()?.rms ?? null;
+  }
+
+  // { rms, proporcion } del micro: rms = volumen (0..1); proporcion = que parte de la energia cae en la banda de la
+  // voz (200-3400 Hz) respecto de todo lo audible. null si no hay micro.
+  function analisisMic() {
+    const a = analizadorVoz || analizadorMic;
+    if (!a || actx?.state !== 'running') return null;
+    a.getFloatTimeDomainData(datosMic);
     let suma = 0;
     for (let i = 0; i < datosMic.length; i++) suma += datosMic[i] * datosMic[i];
-    return Math.sqrt(suma / datosMic.length);
+    const rms = Math.sqrt(suma / datosMic.length);
+    a.getFloatFrequencyData(espectroMic);
+    const hzPorBin = actx.sampleRate / a.fftSize;
+    let voz = 0;
+    let total = 0;
+    for (let i = 1; i < espectroMic.length; i++) {
+      const hz = i * hzPorBin;
+      if (hz < 60 || hz > 12000) continue;
+      const p = 10 ** (espectroMic[i] / 10); // dB -> potencia (-Infinity = 0)
+      total += p;
+      if (hz >= 200 && hz <= 3400) voz += p;
+    }
+    return { rms, proporcion: total > 0 ? voz / total : 0 };
   }
 
   return {
     tick,
     nivelMic,
+    analisisMic,
     agregarMic,
+    agregarMicAnalisis,
     desbloquear,
     streamGrabacion: () => salidaGrab?.stream || null,
     get contexto() { return actx; },

@@ -1,7 +1,7 @@
 // Retos: plan atado a la cancion, validacion sostenida, una sola recompensa.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { armarPlan, crearRetos, cantidadDeRetos, puntosPorReto, PUNTOS_RETO, PUNTOS_TOTAL_RETOS, MIN_RETOS, MAX_RETOS } from '../src/lib/retos.js';
+import { armarPlan, crearRetos, cantidadDeRetos, puntosPorReto, palabrasPorCancion, PUNTOS_RETO, PUNTOS_TOTAL_RETOS, MIN_RETOS, MAX_RETOS } from '../src/lib/retos.js';
 
 // azar determinista
 function lcg(seed = 1) {
@@ -33,20 +33,20 @@ function correr(r, desde, hasta, datos, opts) {
 }
 
 // ------------------------------------------------------------------- plan
-test('plan: un reto cada ~30 s (entre 3 y 7), cada uno vale menos si hay mas, y el total sigue topeado en 30', () => {
-  assert.equal(cantidadDeRetos(120), MIN_RETOS, 'una cancion corta tiene al menos 3');
-  assert.equal(cantidadDeRetos(200), 5);
-  assert.equal(cantidadDeRetos(600), MAX_RETOS, 'y nunca mas de 7');
+test('plan: un reto cada ~20 s (entre 5 y 12), cada uno vale menos si hay mas, y el total sigue topeado en 30', () => {
+  assert.equal(cantidadDeRetos(120), MIN_RETOS, 'una cancion corta tiene al menos 5');
+  assert.equal(cantidadDeRetos(200), 8);
+  assert.equal(cantidadDeRetos(600), MAX_RETOS, 'y nunca mas de 12');
   assert.equal(puntosPorReto(3), PUNTOS_RETO);
-  assert.equal(puntosPorReto(5), 6);
-  for (const n of [3, 4, 5, 6, 7]) assert.ok(puntosPorReto(n) * n <= PUNTOS_TOTAL_RETOS + n, `con ${n} retos el total ronda los 30`);
+  assert.equal(puntosPorReto(8), 4);
+  for (const n of [5, 6, 8, 10, 12]) assert.ok(puntosPorReto(n) * n <= PUNTOS_TOTAL_RETOS + n, `con ${n} retos el total ronda los 30`);
   for (let seed = 1; seed <= 30; seed++) {
     const plan = armarPlan({ duracion: 200, inicios: INICIOS, azar: lcg(seed) });
-    assert.equal(plan.length, 5, 'antes era UNO cada minuto: ahora uno cada ~30 s');
-    assert.equal(plan.valor, 6);
+    assert.equal(plan.length, 8, 'antes era UNO cada minuto: ahora uno cada ~20 s');
+    assert.equal(plan.valor, 4);
     for (let i = 1; i < plan.length; i++) {
-      assert.ok(plan[i].at > plan[i - 1].at + 20, 'separados: no cada 3 segundos');
-      assert.ok(plan[i].at < plan[i - 1].at + 50, 'pero seguidos: no una vez cada tanto');
+      assert.ok(plan[i].at > plan[i - 1].at + 8, 'separados: no cada 3 segundos');
+      assert.ok(plan[i].at < plan[i - 1].at + 40, 'pero seguidos: no una vez cada tanto');
     }
     assert.ok(plan[0].at >= 12, 'no arrancan encima del comienzo');
     assert.ok(plan.at(-1).at < 200 - 15, 'ni pegados al final');
@@ -58,23 +58,25 @@ test('plan: cada reto arranca justo en el comienzo de una linea de letra', () =>
   for (const p of plan) assert.ok(INICIOS.includes(p.at), `${p.at} es inicio de linea`);
 });
 
-test('plan: en TODA cancion con letra hay exactamente 3 retos de la palabra, repartidos, y los gestos varian sin repetirse seguidos', () => {
+test('plan: en TODA cancion con letra la mitad de los retos (minimo 4) son de la palabra, repartidos, y los gestos varian sin repetirse seguidos', () => {
   for (const duracion of [60, 90, 120, 180, 200, 237, 306, 480]) {
     for (let seed = 1; seed <= 10; seed++) {
       const plan = armarPlan({ duracion, inicios: INICIOS, azar: lcg(seed) });
-      assert.equal(plan.filter((p) => p.tipo === 'palabra').length, 3, `${duracion} s: 3 de la palabra`);
-      assert.ok(plan.length >= 3);
+      assert.equal(plan.filter((p) => p.tipo === 'palabra').length, palabrasPorCancion(plan.length), `${duracion} s: la mitad de la palabra`);
+      assert.ok(plan.filter((p) => p.tipo === 'palabra').length >= 4, 'minimo 4 por cancion');
+      assert.ok(plan.length >= 5);
       for (let i = 1; i < plan.length; i++) if (plan[i].tipo !== 'palabra') assert.notEqual(plan[i].tipo, plan[i - 1].tipo, 'un gesto nunca se repite seguido');
       assert.equal(plan.conPalabra, true);
     }
   }
-  // repartidas: una en cada tercio de la cancion
+  // repartidas parejo a lo largo de la cancion
   const p = armarPlan({ duracion: 300, inicios: INICIOS, azar: lcg(4) });
   const w = p.filter((x) => x.tipo === 'palabra').map((x) => x.at);
-  assert.ok(w[0] < 130 && w[1] > 100 && w[1] < 200 && w[2] > 170, `repartidas: ${w.map((x) => Math.round(x)).join(', ')} s`);
+  assert.ok(w[0] < 110 && w.at(-1) > 190, `repartidas: ${w.map((x) => Math.round(x)).join(', ')} s`);
+  for (let i = 1; i < w.length; i++) assert.ok(w[i] - w[i - 1] < 90, 'sin huecos enormes entre palabras');
   const sin = armarPlan({ duracion: 200, inicios: INICIOS, azar: lcg(2), conPalabra: false });
   assert.equal(sin.filter((p) => p.tipo === 'palabra').length, 0, 'sin letra no hay palabra');
-  assert.equal(sin.length, 5);
+  assert.equal(sin.length, 8);
   assert.equal(sin.conPalabra, false);
 });
 
@@ -171,7 +173,7 @@ test('si no se hace el gesto, el reto termina por tiempo, sin puntos y avisa', (
 
 test('pasa al siguiente reto: se cumplen todos los del plan, cada uno una vez, y el total ronda los 30', () => {
   const { r, log } = montar({ conPalabra: false });
-  const tipos = ['una', 'dos', 'saludo', 'corazon', 'una', 'dos', 'saludo'];
+  const tipos = ['una', 'dos', 'saludo', 'corazon', 'una', 'dos', 'saludo', 'corazon'];
   r.plan.forEach((p, i) => { p.tipo = tipos[i]; });
   const datos = { ...DATOS_VACIOS, unaArriba: true, dosArriba: true, saludo: true, corazon: true };
   correr(r, 0, 195, datos);
@@ -179,12 +181,12 @@ test('pasa al siguiente reto: se cumplen todos los del plan, cada uno una vez, y
   assert.deepEqual(log.cumplidos.map((c) => c.tipo), tipos.slice(0, r.plan.length));
   assert.equal(new Set(log.cumplidos.map((c) => c.id)).size, r.plan.length, 'ids distintos: el server cuenta cada uno una vez');
   const total = log.cumplidos.reduce((s, c) => s + c.puntos, 0);
-  assert.ok(total >= 28 && total <= 32, `suman ~30 (${total})`);
+  assert.ok(total >= 28 && total <= 34, `suman ~30 (${total})`);
 });
 
 test('si falla uno los otros siguen sumando', () => {
   const { r, log } = montar({ conPalabra: false });
-  r.plan.forEach((p, i) => { p.tipo = ['una', 'dos', 'saludo', 'corazon', 'una'][i]; });
+  r.plan.forEach((p, i) => { p.tipo = ['una', 'dos', 'saludo', 'corazon'][i % 4]; });
   const datos = (t) => (t > r.plan[1].at && t < r.plan[1].at + 8 ? DATOS_VACIOS : { ...DATOS_VACIOS, unaArriba: true, dosArriba: true, saludo: true, corazon: true });
   correr(r, 0, 195, datos);
   assert.equal(log.cumplidos.length, r.plan.length - 1);
@@ -294,7 +296,7 @@ test('en una cancion de 3:30 hay retos seguidos durante TODA la cancion (no uno 
     if (r.activo?.reto.tipo === 'palabra') r.resolverPalabra({ id: r.activo.id, acierto: true, palabra: 'x', puntos: r.valor });
   }
   const hechos = log.resultados.filter((x) => x.ok).length;
-  assert.ok(hechos >= 5, `se cumplieron ${hechos} retos en una sola cancion`);
+  assert.ok(hechos >= 7, `se cumplieron ${hechos} retos en una sola cancion`);
 });
 
 test('palabra: sin respuesta, se cierra por tiempo y avisa al server', () => {

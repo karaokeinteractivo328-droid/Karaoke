@@ -617,3 +617,21 @@ test('el token del video no viaja en el snapshot publico', () => {
   assert.match(m.e.yo(a).videoToken, /^[0-9a-f]{32}$/);
   assert.equal(m.e.yo(m.persona(2)).videoToken, null);
 });
+
+test('reacciones nuevas (estrella, baile, risa): son validas, cuentan en PLAYING y suman al publico', () => {
+  const m = mundo();
+  const a = m.persona(1, 'A');
+  const f = m.persona(2, 'Fan');
+  m.e.entrarFila(a);
+  m.e.elegirCancion(a, 'a');
+  m.e.listo(a);
+  m.avanzar(3000);
+  for (const tipo of ['estrella', 'baile', 'risa']) {
+    m.avanzar(300);
+    assert.equal(m.e.reaccionar(f, tipo).contada, true, tipo);
+  }
+  assert.equal(m.e.reaccionar(f, 'inventada').ok, false, 'un tipo desconocido se rechaza');
+  const r = m.e.pantallaFin({ progreso: 1 });
+  assert.deepEqual([r.reacciones.estrella, r.reacciones.baile, r.reacciones.risa], [1, 1, 1]);
+  assert.equal(r.desglose.publico, Math.round((30 * (1.5 + 1 + 1)) / 20), 'ponderadas: 1,5 + 1 + 1');
+});

@@ -186,7 +186,7 @@ Variables del server: `YOUTUBE_API_KEY`, `YOUTUBE_API_BASE` y `LRCLIB_URL` (solo
 
 | Rol | Ve |
 |---|---|
-| Público | quién canta (con barra de progreso), quién sigue, ❤️🔥👏 grandes, **🎤 Quiero cantar** |
+| Público | quién canta (con barra de progreso), quién sigue, ❤️🔥👏⭐💃😂 grandes, **🎤 Quiero cantar** |
 | En fila | posición y tiempo estimado, **buscador de canciones** con estado del audio, solo/dúo, cancelar, **código de copiloto** |
 | Su turno | "¡PASÁ AL FRENTE!" (vibra), estado del audio y **¡LISTO!** (solo se habilita con el audio listo) |
 | Cantando | su canción, reacciones en vivo, teleprompter, "Terminar" |
@@ -218,7 +218,7 @@ registrada: después de reiniciar el server, el primer toque en "Quiero cantar" 
 ### Puntaje (100 puntos, entendible)
 
 `Canción (0–40)` = 40 × lo que se cantó · `Retos (0–30)` = los retos de la canción (cada uno vale 30 ÷ cantidad) ·
-`Público (0–30)` = ❤️×1 + 🔥×1,5 + 👏×1 (20 ponderadas = 30 puntos).
+`Público (0–30)` = ❤️×1 + 🔥×1,5 + 👏×1 + ⭐×1,5 + 💃×1 + 😂×1 (20 ponderadas = 30 puntos).
 
 Los puntos de retos **los lleva el server** (cada reto se registra por id, una sola vez,
 con tope de 30): si la pantalla se recarga a mitad de la canción no se pierden.
@@ -355,20 +355,22 @@ La pantalla escucha el **micrófono** ([voz.js](web/src/lib/voz.js)) y sabe si a
   filtre de la música, el aire acondicionado…): la voz tiene que estar claramente por encima y sostenerse ~0,25 s (un golpe suelto
   o la música sola no cuentan). Cantar con pausas para respirar sigue contando como cantar.
 - **Se ve**: el 🎤 de la píldora del cantante **late** mientras se escucha su voz.
-- **Aliento**: si la letra pide cantar (hay una línea en curso, no un instrumental) y pasan **7 s seguidos sin voz**, aparece abajo un
+- **Aliento**: si la letra pide cantar (hay una línea en curso, no un instrumental) y pasan **8 s seguidos sin voz**, aparece abajo un
   mensaje ("¡Dale Ana, cantá! 🎤", "¡Animate, que la letra es tuya! ✨", "¡Vos podés, cantá fuerte! 💪"…) y el **celu de quien canta
-  (y su copiloto) recibe el mismo aviso con vibración**. No insiste: como mucho uno cada 14 s, con mensajes distintos, no en los primeros
-  8 s de la canción, y **se celebra** cuando la voz vuelve ("¡Así se canta! 🔥").
+  (y su copiloto) recibe el mismo aviso con vibración**. No insiste: como mucho uno cada 18 s, con mensajes distintos, no en los primeros
+  10 s de la canción, y **se celebra** cuando la voz vuelve ("¡Así se canta! 🔥").
 - **Presencia**: la voz también cuenta como "hay alguien", así que quien canta **fuera de cuadro** no corta la canción por el
   corte de "nadie en cámara" (45 s).
-- Sin micrófono (chip "sin mic") no se alienta: si no se puede escuchar, no se sabe si canta.
+- Sin micrófono (chip "sin mic"), con el micro mudo (silencio digital) o antes de conocer el ruido de la sala (primeros 2,5 s) no se alienta: si no se puede escuchar, no se sabe si canta.
+- **Cómo distingue la voz**: mide el volumen **solo en la banda de la voz (200–3400 Hz)**, así un golpe o un zumbido grave no cuentan; usa un **segundo micrófono sin control automático de ganancia** (el del navegador sube el volumen en el silencio y lo baja apenas alguien canta); **calibra con la música**: durante los primeros segundos de la canción lo que se cuela por el micro se toma como ruido de fondo.
+- **Cuándo alienta**: silencio de 8 s seguidos mientras la letra pide cantar, **con al menos 2 líneas de letra sin voz** (un instrumental no cuenta), no en los primeros 10 s ni en los últimos 10 s, y como mucho cada 18 s.
 
 ### Retos durante la canción
 
-[retos.js](web/src/lib/retos.js) arma, para cada performance, un **plan de retos: uno cada ~30 s**
-(entre 3 y 7 según lo que dure la canción; **en todas las canciones con letra hay exactamente 3 retos de
+[retos.js](web/src/lib/retos.js) arma, para cada performance, un **plan de retos: uno cada ~20 s**
+(entre 5 y 12 según lo que dure la canción; **en todas las canciones con letra la mitad de los retos, y nunca menos de 4, son de
 completar la palabra**, repartidas parejo, y el resto son gestos con la mano distintos sin repetirse seguidos). Cada reto vale 30 ÷ cantidad (tope total 30 puntos,
-p. ej. 5 retos de 6). Atado a la canción:
+p. ej. 8 retos de 4). Atado a la canción:
 
 - Cada reto arranca en el **comienzo de una línea de letra**, en segundos de **audio** (el
   mismo reloj que la letra: nada de temporizadores propios que se desfasen).

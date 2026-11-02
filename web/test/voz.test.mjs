@@ -91,7 +91,7 @@ const base = { enCancion: true, cantable: true, micVivo: true, nombre: 'Ana' };
 test('con silencio seguido durante la letra, alienta (con el nombre) y no antes de tiempo', () => {
   const a = crearAliento({ azar: () => 0 });
   assert.equal(a.tick({ ...base, ahora: 20_000, silencioMs: 3_000, cancionMs: 20_000 }), null, 'todavia hay poco silencio');
-  const r = a.tick({ ...base, ahora: 24_000, silencioMs: 7_500, cancionMs: 24_000 });
+  const r = a.tick({ ...base, ahora: 24_000, silencioMs: 8_500, cancionMs: 24_000 });
   assert.equal(r.accion, 'mostrar');
   assert.equal(r.tipo, 'aliento');
   assert.ok(MENSAJES_ALIENTO.some((m) => m.replace('{nombre}', 'Ana') === r.texto));
@@ -109,7 +109,7 @@ test('no alienta si no hay cancion o no se escucha el micro (no se puede saber s
   assert.equal(a.tick({ ...base, ahora: 31_000, silencioMs: 20_000, cancionMs: 31_000, micVivo: false }), null);
 });
 
-test('no insiste todo el tiempo: entre un aliento y otro pasan al menos 14 s, y los mensajes cambian', () => {
+test('no insiste todo el tiempo: entre un aliento y otro pasan al menos 18 s, y los mensajes cambian', () => {
   const a = crearAliento({ azar: () => 0 });
   const textos = [];
   let t = 20_000;
@@ -118,9 +118,9 @@ test('no insiste todo el tiempo: entre un aliento y otro pasan al menos 14 s, y 
     const r = a.tick({ ...base, ahora: t, silencioMs: 30_000, cancionMs: t });
     if (r?.accion === 'mostrar') textos.push([t, r.texto]);
   }
-  assert.ok(textos.length >= 3 && textos.length <= 5, `${textos.length} alientos en un minuto de silencio`);
+  assert.ok(textos.length >= 3 && textos.length <= 4, `${textos.length} alientos en un minuto de silencio`);
   for (let i = 1; i < textos.length; i++) {
-    assert.ok(textos[i][0] - textos[i - 1][0] >= 14_000, 'separados');
+    assert.ok(textos[i][0] - textos[i - 1][0] >= 18_000, 'separados');
     assert.notEqual(textos[i][1], textos[i - 1][1], 'mensajes distintos');
   }
 });
@@ -158,4 +158,55 @@ test('al terminar la cancion se oculta lo que quedara visible y se reinicia para
   assert.equal(r.accion, 'ocultar');
   // otra cancion: vuelve a empezar de cero (otra vez espera el silencio y el inicio)
   assert.equal(a.tick({ ...base, ahora: 30_000, silencioMs: 8_000, cancionMs: 3_000 }), null);
+});
+
+// ------------------------------------------------- mejoras: banda de la voz, micro mudo, lineas sin voz
+test('un ruido que NO es de la banda de la voz (golpe, zumbido grave) no cuenta como cantar, aunque sea fuerte', () => {
+  const d = crearDetectorVoz();
+  let t = 0;
+  for (; t < 3_000; t += 50) d.muestra(0.002, t, 0.6); // sala en silencio
+  for (; t < 8_000; t += 50) d.muestra(0.12, t, 0.08); // fuerte pero casi toda la energia fuera de 200-3400 Hz
+  assert.equal(d.cantando(t), false);
+  for (; t < 10_000; t += 50) d.muestra(0.12, t, 0.75); // la misma fuerza, pero en la banda de la voz
+  assert.equal(d.cantando(t), true);
+});
+
+test('micro mudo (silencio digital) o sin llegar datos: no esta "vivo", asi que nunca se alienta', () => {
+  const d = crearDetectorVoz();
+  for (let t = 0; t < 12_000; t += 50) d.muestra(0, t);
+  assert.equal(d.vivo(12_000), false, 'silencio digital = micro mudo o desconectado');
+  const d2 = crearDetectorVoz();
+  for (let t = 0; t < 12_000; t += 50) d2.muestra(0.001, t);
+  assert.equal(d2.vivo(12_000), true, 'una sala callada pero con micro andando si');
+});
+
+test('antes de conocer el ruido de la sala (primeros segundos) todavia no esta "listo"', () => {
+  const d = crearDetectorVoz();
+  d.reiniciar(0);
+  d.muestra(0.002, 100);
+  assert.equal(d.listo(1_000), false);
+  assert.equal(d.listo(3_000), true);
+});
+
+test('no alienta si pasaron menos de 2 lineas sin voz (un instrumental largo con una sola linea no es "no canta")', () => {
+  const a = crearAliento({ azar: () => 0 });
+  assert.equal(a.tick({ ...base, ahora: 30_000, silencioMs: 20_000, cancionMs: 30_000, lineasSilencio: 1 }), null);
+  const r = a.tick({ ...base, ahora: 31_000, silencioMs: 21_000, cancionMs: 31_000, lineasSilencio: 2 });
+  assert.equal(r.accion, 'mostrar');
+});
+
+test('no alienta sobre el final de la cancion', () => {
+  const a = crearAliento({ azar: () => 0 });
+  assert.equal(a.tick({ ...base, ahora: 200_000, silencioMs: 30_000, cancionMs: 200_000, restanteMs: 6_000 }), null);
+  assert.equal(a.tick({ ...base, ahora: 120_000, silencioMs: 30_000, cancionMs: 120_000, restanteMs: 80_000 })?.accion, 'mostrar');
+});
+
+test('la musica arranca de golpe (de silencio a musica filtrada al micro): con la calibracion inicial NO se toma por voz', () => {
+  const d = crearDetectorVoz();
+  let t = correr(d, 0, 3_000, 0.002); // cuenta regresiva en silencio
+  for (const fin = t + 3_500; t < fin; t += 50) { d.calibrar(700, t); d.muestra(0.05, t, 0.7); } // suena la musica
+  for (const fin = t + 6_000; t < fin; t += 50) d.muestra(0.05, t, 0.7);
+  assert.equal(d.cantando(t), false);
+  for (const fin = t + 2_000; t < fin; t += 50) d.muestra(0.2, t, 0.8); // y ahora si canta
+  assert.equal(d.cantando(t), true);
 });

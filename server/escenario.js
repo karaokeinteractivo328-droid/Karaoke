@@ -62,7 +62,7 @@ export const CONFIG_BASE = Object.freeze({
 });
 
 const ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sin 0/O/1/I
-const PESO = Object.freeze({ corazon: 1, fuego: 1.5, aplauso: 1 });
+const PESO = Object.freeze({ corazon: 1, fuego: 1.5, aplauso: 1, estrella: 1.5, baile: 1, risa: 1 });
 const TOKEN_OK = /^[A-Za-z0-9_-]{16,64}$/;
 
 const aleatorio = (largo, alfabeto) => {
@@ -75,7 +75,7 @@ const idCorto = () => aleatorio(6, 'abcdefghijkmnpqrstuvwxyz23456789');
 const clamp01 = (n) => Math.max(0, Math.min(1, n));
 const limpiarNombre = (n) => String(n ?? '').replace(/\s+/g, ' ').trim().slice(0, 24);
 const redondear10 = (s) => Math.round(s / 10) * 10;
-const reaccionesVacias = () => ({ corazon: 0, fuego: 0, aplauso: 0 });
+const reaccionesVacias = () => ({ corazon: 0, fuego: 0, aplauso: 0, estrella: 0, baile: 0, risa: 0 });
 
 export function crearEscenario({
   canciones = [],
@@ -518,7 +518,7 @@ export function crearEscenario({
         ? clamp01(transcurrido / dur)
         : 1;
     const r = actual.reacciones;
-    const ponderadas = r.corazon * PESO.corazon + r.fuego * PESO.fuego + r.aplauso * PESO.aplauso;
+    const ponderadas = Object.entries(PESO).reduce((s, [k, peso]) => s + (r[k] || 0) * peso, 0);
     const cancion = Math.round(40 * prog);
     const retos = Math.min(C.RETOS_MAX, Math.round(actual.retosPuntos || 0));
     const publico = Math.min(30, Math.round((30 * ponderadas) / 20));
