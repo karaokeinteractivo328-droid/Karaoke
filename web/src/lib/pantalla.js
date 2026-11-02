@@ -11,6 +11,7 @@ import { conectar, SOCKET_URL } from './socket.js';
 import { parsearLRC, indiceActual, tiemposPalabras } from './lrc.js';
 import { crearReloj, desfaseParaAlinear } from './reloj.js';
 import { crearDetectorVoz, crearAliento } from './voz.js';
+import { crearVigilante } from './rendimiento.js';
 import { crearPrecarga } from './precarga.js';
 import { cargarApiYouTube, crearReproductorYouTube, ESTADO as YT_ESTADO } from './youtube.js';
 import { logAudio, logCancion, errorAudio, diagnostico } from './audioLog.js';
@@ -126,6 +127,7 @@ const detectorVoz = crearDetectorVoz();
 const aliento = crearAliento();
 let alientoTimer = null;
 setInterval(() => {
+  if (etapaActual !== 'COUNTDOWN' && etapaActual !== 'PLAYING') return; // fuera de la cancion no hay nada que escuchar
   const nivel = audioBus.nivelMic();
   if (nivel === null) return;
   const t = performance.now();
@@ -138,6 +140,15 @@ setInterval(() => {
   }
 }, 50);
 let ultimaPresenciaVoz = 0;
+
+// Las manos solo se usan para los retos y el esqueleto que se ve en pantalla: mientras se espera o se muestra el
+// resultado (nadie hace gestos) alcanza con detectar unas pocas veces por segundo. Siempre queda un resultado
+// reciente (cada <1 s), asi la presencia y la salud del tracking siguen funcionando.
+let visionCtl = null;
+function ajustarRitmoDeteccion() {
+  visionCtl?.setRitmo(etapaActual === 'STANDBY' || etapaActual === 'RESULT' ? 500 : 0);
+  visionCtl?.setFactor(vigilante.liviano ? 2.5 : 1);
+}
 
 function mostrarAliento({ tipo, texto }) {
   const el = $('#aliento');
@@ -210,7 +221,19 @@ const retos = crearRetos({
 // README "Modo kiosco"); si no, aparece un chip discreto y un clic lo destraba.
 audioBus.desbloquear();
 
-function frame() {
+// Si la pantalla (una tele, una compu justa) no llega a moverse fluida, se pasa sola al MODO LIVIANO: sin mezclas
+// de color ni giro de la estrella y con el reconocimiento de manos mas espaciado. Vuelve al normal si se recupera.
+const vigilante = crearVigilante({
+  alCambiar: (liviano, ms) => {
+    body.dataset.rendimiento = liviano ? 'bajo' : 'normal';
+    visionCtl?.setFactor(liviano ? 2.5 : 1);
+    console.warn(`[rendimiento] modo ${liviano ? 'LIVIANO' : 'normal'} (cuadro promedio ${ms.toFixed(0)} ms)`);
+    logAudio(`rendimiento: modo ${liviano ? 'liviano' : 'normal'} (cuadro ${ms.toFixed(0)} ms)`);
+  },
+});
+
+function frame(t) {
+  vigilante.cuadro(t, !document.hidden);
   fondo.latir(audioBus.tick());
   camara.dibujar(datosManos);
   requestAnimationFrame(frame);
@@ -280,6 +303,10 @@ pedirMedios()
           socket.emit('pantalla:presencia', { hay: !!hayPersona });
         }
       },
+    }).then((ctl) => {
+      visionCtl = ctl;
+      ajustarRitmoDeteccion();
+      return ctl;
     }).catch((err) => {
       // la camara anda pero MediaPipe no cargo: antes esto era SILENCIOSO y los
       // retos con manos simplemente no aparecian nunca
@@ -366,6 +393,7 @@ socket.on('estado', (s) => {
   offsetServidor = s.serverNow - Date.now();
   const cambio = s.etapa !== etapaPrevia;
   etapaActual = s.etapa;
+  if (cambio) ajustarRitmoDeteccion();
   modoActual = s.actual?.modo || 'solo';
   body.dataset.estado = s.etapa;
   body.dataset.modo = modoActual;
@@ -529,6 +557,7 @@ let audioDetectado = false; // se vio señal real en el analizador (la musica ll
 let silencioChequeado = 0;
 const barra = $('#progreso');
 const barraFill = barra.querySelector('span');
+let progresoMostrado = -1;
 
 // UNA sola fuente de verdad para la letra, los retos, el progreso y el fin:
 // el tiempo REAL del audio (ver reloj.js). Nada de temporizadores paralelos.
@@ -641,7 +670,8 @@ async function arrancarCancion(actual) {
   clearTimeout(finTimer);
   mostrarLinea(-1, true);
   barra.hidden = false;
-  barraFill.style.width = '0%';
+  progresoMostrado = -1;
+  barraFill.style.transform = 'scaleX(0)';
   retos.reset();
   palabraEstado = null;
   detectorVoz.reiniciar(performance.now()); // el silencio se cuenta desde que empieza ESTA cancion
@@ -746,8 +776,12 @@ const relojBase = () => reloj.base();
 function tickLetra() {
   const base = reloj.base(); // segundos de audio (progreso y retos)
   const t = reloj.letra(offsetLetra); // tiempo de letra (audio - offset - latencia)
-  barraFill.style.width =
-    Math.max(0, Math.min(100, (base / duracionCancion) * 100)).toFixed(1) + '%';
+  // la barra se mueve con `transform` (no recalcula la pagina) y solo si avanzo al menos 0,1 %
+  const avance = Math.round(Math.max(0, Math.min(1, base / duracionCancion)) * 1000) / 1000;
+  if (avance !== progresoMostrado) {
+    progresoMostrado = avance;
+    barraFill.style.transform = `scaleX(${avance})`;
+  }
 
   const nuevo = indiceActual(letras, t);
   if (nuevo !== idxLetra) {

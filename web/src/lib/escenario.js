@@ -35,9 +35,18 @@ export function crearEscenario(contenedor) {
   svg.append(sombra, forma);
   contenedor.appendChild(svg);
 
+  // El latido solo se actualiza si el cambio se NOTA (>0,4 %) y a lo sumo 20 veces por segundo: antes se
+  // escribia una variable CSS en cada cuadro (60/s) y eso obligaba al navegador a recalcular estilos todo el tiempo.
+  let ultimoPulso = -1;
+  let ultimoT = 0;
   return {
     latir(energia = 0) {
-      svg.style.setProperty('--pulso', (1 + energia * 0.14).toFixed(3));
+      const pulso = 1 + energia * 0.14;
+      const t = performance.now();
+      if (Math.abs(pulso - ultimoPulso) < 0.004 || t - ultimoT < 50) return;
+      ultimoPulso = pulso;
+      ultimoT = t;
+      svg.style.setProperty('--pulso', pulso.toFixed(3));
     },
     setModo(modo) {
       contenedor.dataset.modo = modo || '';

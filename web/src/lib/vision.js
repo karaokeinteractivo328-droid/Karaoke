@@ -46,6 +46,12 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
   let proximaCara = 0;
   let proximaDeteccion = 0;
   let costoDeteccion = 0; // ms que tarda una deteccion (media movil)
+  let ritmoMinMs = 0; // separacion minima entre detecciones (se sube cuando nadie usa las manos)
+  let factorCosto = 1; // tras cada deteccion se espera `factor` x lo que tardo (1 = hasta la mitad del tiempo; 2,5 = ~30 %)
+
+  // Se despierta SOLO cuando la camara entrega un cuadro nuevo (30/s) en vez de en cada vuelta de la
+  // pantalla (60/s): la mitad de despertares inutiles. Si el navegador no sabe, vuelve al metodo de antes.
+  const proximoCuadro = (f) => (video.requestVideoFrameCallback ? video.requestVideoFrameCallback(() => f()) : requestAnimationFrame(f));
 
   function loop() {
     if (!corriendo) return;
@@ -57,7 +63,7 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
       // la mitad del tiempo: el hilo principal tambien dibuja la pantalla y GRABA el video,
       // y si MediaPipe se lo come todo el video sale a 3 cuadros por segundo.
       if (ts < proximaDeteccion) {
-        requestAnimationFrame(loop);
+        proximoCuadro(loop);
         return;
       }
       let manosRes;
@@ -68,10 +74,10 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
       }
       const costo = performance.now() - ts;
       costoDeteccion = costoDeteccion ? costoDeteccion * 0.8 + costo * 0.2 : costo;
-      proximaDeteccion = ts + Math.min(500, costoDeteccion);
+      proximaDeteccion = ts + Math.max(ritmoMinMs, Math.min(500, costoDeteccion * factorCosto));
 
       if (faceDetector && ts >= proximaCara) {
-        proximaCara = ts + 350;
+        proximaCara = ts + Math.max(350, ritmoMinMs);
         try {
           const f = faceDetector.detectForVideo(video, ts);
           hayPersona = (f?.detections?.length || 0) > 0;
@@ -99,11 +105,16 @@ export async function crearReconocimiento({ video, numManos = 2, onResultado }) 
         ts,
       });
     }
-    requestAnimationFrame(loop);
+    proximoCuadro(loop);
   }
-  requestAnimationFrame(loop);
+  proximoCuadro(loop);
 
   return {
+    // `ms` = cada cuanto detectar como minimo (0 = lo mas rapido que se pueda). Cuando nadie usa las manos
+    // (esperando / resultado) alcanza con unas pocas detecciones por segundo.
+    setRitmo: (ms = 0) => { ritmoMinMs = Math.max(0, Number(ms) || 0); },
+    // modo liviano: la deteccion usa menos tiempo de la compu (las manos se actualizan menos seguido)
+    setFactor: (f = 1) => { factorCosto = Math.max(1, Number(f) || 1); },
     detener: () => {
       corriendo = false;
       handLandmarker.close?.();

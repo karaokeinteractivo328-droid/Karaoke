@@ -506,9 +506,13 @@ body[data-estado="PLAYING"] #qrFijo img { width: clamp(64px, 10vmin, 120px); }
 #progreso span {
   display: block;
   height: 100%;
-  width: 0%;
+  width: 100%;
   background: var(--rosa-hot);
-  transition: width 0.2s linear;
+  /* se mueve con transform (no obliga al navegador a recalcular la pagina como hacia `width`) */
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.2s linear;
+  will-change: transform;
 }
 
 #cantandoAhora {
@@ -863,3 +867,11 @@ body[data-yt="chico"] #ytWrap {
 #micPulso { display: inline-block; }
 body[data-voz="si"] #micPulso { animation: micLate 0.45s ease-in-out infinite alternate; filter: drop-shadow(0 0 6px var(--rosa-hot)); }
 @keyframes micLate { from { transform: scale(1); } to { transform: scale(1.35); } }
+
+/* ---- MODO LIVIANO (se activa solo si la pantalla no llega a moverse fluida: tele, compu justa) ----
+   Se apagan los efectos que mas cuestan y que menos se notan: mezclas de color sobre la camara a pantalla completa,
+   el giro de la estrella y las transiciones de fondo. */
+body[data-rendimiento="bajo"] #estrella-wrap { mix-blend-mode: normal; opacity: 0.85; }
+body[data-rendimiento="bajo"] .estrella { animation: none; transition: none; }
+body[data-rendimiento="bajo"] #tinte { mix-blend-mode: normal; transition: none; background: transparent !important; }
+body[data-rendimiento="bajo"] .halftone { display: none; }
